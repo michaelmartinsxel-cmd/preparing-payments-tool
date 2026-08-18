@@ -205,15 +205,16 @@ def classificar_semana(df_banco: pd.DataFrame, df_partidas: pd.DataFrame) -> tup
 
 FMT = "#,##0.00;-#,##0.00;-"
 PCT = "0.0%"
-ARIAL = "Arial"
+FONTE = "Aptos"
+CENTER = Alignment(horizontal="center")
 H_FILL = PatternFill("solid", fgColor="1F3864")
-H_FONT = Font(name=ARIAL, size=9, bold=True, color="FFFFFF")
+H_FONT = Font(name=FONTE, size=9, bold=True, color="FFFFFF")
 T_FILL = PatternFill("solid", fgColor="D9E1F2")
-BODY = Font(name=ARIAL, size=9)
-BOLD = Font(name=ARIAL, size=9, bold=True)
-TITLE = Font(name=ARIAL, size=9, bold=True, color="1F3864")
-LABEL = Font(name=ARIAL, size=9, bold=True, color="404040")
-NOTE = Font(name=ARIAL, size=9, italic=True, color="808080")
+BODY = Font(name=FONTE, size=9)
+BOLD = Font(name=FONTE, size=9, bold=True)
+TITLE = Font(name=FONTE, size=9, bold=True, color="1F3864")
+LABEL = Font(name=FONTE, size=9, bold=True, color="404040")
+NOTE = Font(name=FONTE, size=9, italic=True, color="808080")
 THIN = Side(style="thin", color="BFBFBF")
 BOX = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 
@@ -226,9 +227,9 @@ _FILL_POR_SEV = {"BLOQUEIO": FILL_BLOQUEIO, "ALERTA": FILL_ALERTA, "OK": FILL_OK
 # "Dinâmica por produto". Santander = vermelho da marca; BB = amarelo da
 # marca, com texto no azul da marca (amarelo puro não lê bem com branco).
 SANTANDER_FILL = PatternFill("solid", fgColor="EC0000")
-SANTANDER_FONT = Font(name=ARIAL, size=9, bold=True, color="FFFFFF")
+SANTANDER_FONT = Font(name=FONTE, size=9, bold=True, color="FFFFFF")
 BB_FILL = PatternFill("solid", fgColor="FFCC00")
-BB_FONT = Font(name=ARIAL, size=9, bold=True, color="003087")
+BB_FONT = Font(name=FONTE, size=9, bold=True, color="003087")
 
 
 def _cabecalho(ws, row, cols, widths, col_inicio=1):
@@ -244,7 +245,7 @@ def _linha_total(ws, row, ncols, rotulo_col, rotulo):
     ws.cell(row=row, column=rotulo_col, value=rotulo)
     for c in range(1, ncols + 1):
         cell = ws.cell(row=row, column=c)
-        cell.font, cell.fill, cell.border = BOLD, T_FILL, BOX
+        cell.font, cell.fill, cell.border, cell.alignment = BOLD, T_FILL, BOX, CENTER
 
 
 def _checks(base: pd.DataFrame, janela: "config.Janela") -> list[tuple[str, str, str]]:
@@ -364,16 +365,15 @@ def _aba_base(wb: Workbook, base: pd.DataFrame) -> int:
     for r, row in enumerate(base[cols].itertuples(index=False), start=2):
         for c, v in enumerate(row, start=1):
             cell = ws.cell(row=r, column=c, value=v)
-            cell.font, cell.border = BODY, BOX
+            cell.font, cell.border, cell.alignment = BODY, BOX, CENTER
             if c == 2:
                 cell.number_format = "DD/MM/YYYY"
-                cell.alignment = Alignment(horizontal="center")
             if c == 6:
                 cell.number_format = FMT
     last = len(base) + 1
     _linha_total(ws, last + 1, 6, 5, "Total Geral")
     tv = ws.cell(row=last + 1, column=6, value=f"=SUM(F2:F{last})")
-    tv.number_format = FMT
+    tv.number_format, tv.alignment = FMT, CENTER
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = f"A1:F{last}"
     return last
@@ -385,7 +385,7 @@ def _aba_resumo(wb: Workbook, janela: "config.Janela", base: pd.DataFrame, last:
     ws["A1"] = "Relatório de Aprovação de Pagamentos"
     ws["A1"].font = TITLE
     ws["A2"] = f"Nordex Energy Brasil LTDA — Company Code 4690 — {janela.rotulo}"
-    ws["A2"].font = Font(name=ARIAL, size=9, color="404040")
+    ws["A2"].font = Font(name=FONTE, size=9, color="404040")
 
     bancos = sorted(base["Banco"].dropna().unique())
     meta = [
@@ -404,7 +404,9 @@ def _aba_resumo(wb: Workbook, janela: "config.Janela", base: pd.DataFrame, last:
         r += 1
 
     r += 1
-    ws.cell(row=r, column=1, value="Resumo por produto").font = Font(name=ARIAL, size=9, bold=True)
+    titulo = ws.cell(row=r, column=1, value="Resumo por produto")
+    titulo.font = Font(name=FONTE, size=10, bold=True)
+    titulo.alignment = Alignment(horizontal="center", vertical="center")
     r += 1
     _cabecalho(ws, r, ["Produto", "Qtd. documentos", "Valor (BRL)", "% do total"], [30, 18, 18, 12])
 
@@ -418,9 +420,8 @@ def _aba_resumo(wb: Workbook, janela: "config.Janela", base: pd.DataFrame, last:
         ws.cell(row=rr, column=3, value=f"=SUMIF(Base!$D$2:$D${last},$A{rr},Base!$F$2:$F${last})")
         ws.cell(row=rr, column=4, value=f"=IFERROR(C{rr}/$C${total_row},0)")
         for c in range(1, 5):
-            ws.cell(row=rr, column=c).font = BODY
-            ws.cell(row=rr, column=c).border = BOX
-        ws.cell(row=rr, column=2).alignment = Alignment(horizontal="center")
+            cell = ws.cell(row=rr, column=c)
+            cell.font, cell.border, cell.alignment = BODY, BOX, CENTER
         ws.cell(row=rr, column=3).number_format = FMT
         ws.cell(row=rr, column=4).number_format = PCT
 
@@ -428,7 +429,6 @@ def _aba_resumo(wb: Workbook, janela: "config.Janela", base: pd.DataFrame, last:
     ws.cell(row=total_row, column=3, value=f"=SUM(C{first}:C{total_row - 1})")
     ws.cell(row=total_row, column=4, value=1)
     _linha_total(ws, total_row, 4, 1, "Total Geral")
-    ws.cell(row=total_row, column=2).alignment = Alignment(horizontal="center")
     ws.cell(row=total_row, column=3).number_format = FMT
     ws.cell(row=total_row, column=4).number_format = PCT
 
@@ -449,8 +449,10 @@ def _aba_produto(wb: Workbook, produto: str, base: pd.DataFrame, janela: "config
     ws.sheet_view.showGridLines = False
     ws["A1"] = produto
     ws["A1"].font = TITLE
+    ws["A1"].alignment = CENTER
     ws["A2"] = f"Posting Date {janela.rotulo} · Status Pendentes"
     ws["A2"].font = NOTE
+    ws["A2"].alignment = CENTER
     _cabecalho(ws, 4, ["Fornecedor", "Qtd. documentos", "Valor (BRL)"], [52, 18, 18])
 
     f0 = 5
@@ -464,16 +466,14 @@ def _aba_produto(wb: Workbook, produto: str, base: pd.DataFrame, janela: "config
                   f"Base!$E$2:$E${last},$A{rr})",
         )
         for c in range(1, 4):
-            ws.cell(row=rr, column=c).font = BODY
-            ws.cell(row=rr, column=c).border = BOX
-        ws.cell(row=rr, column=2).alignment = Alignment(horizontal="center")
+            cell = ws.cell(row=rr, column=c)
+            cell.font, cell.border, cell.alignment = BODY, BOX, CENTER
         ws.cell(row=rr, column=3).number_format = FMT
 
     tt = f0 + len(sub)
     ws.cell(row=tt, column=2, value=f"=SUM(B{f0}:B{tt - 1})")
     ws.cell(row=tt, column=3, value=f"=SUM(C{f0}:C{tt - 1})")
     _linha_total(ws, tt, 3, 1, "Total Geral")
-    ws.cell(row=tt, column=2).alignment = Alignment(horizontal="center")
     ws.cell(row=tt, column=3).number_format = FMT
     ws.freeze_panes = "A5"
 
@@ -481,30 +481,34 @@ def _aba_produto(wb: Workbook, produto: str, base: pd.DataFrame, janela: "config
 def _aba_validacoes(wb: Workbook, checks: list[tuple[str, str, str]], atencao: pd.DataFrame) -> None:
     ws = wb.create_sheet("Validações")
     ws.sheet_view.showGridLines = False
+    ws.sheet_state = "hidden"
     ws["A1"] = "Log de validação"
     ws["A1"].font = TITLE
+    ws["A1"].alignment = CENTER
     _cabecalho(ws, 3, ["Check", "Severidade", "Detalhe"], [38, 14, 70])
 
     r = 4
     for check, sev, detalhe in checks:
-        ws.cell(row=r, column=1, value=check).font = BODY
+        c1 = ws.cell(row=r, column=1, value=check)
+        c1.font, c1.alignment = BODY, CENTER
         sc = ws.cell(row=r, column=2, value=sev)
-        sc.font, sc.fill = BOLD, _FILL_POR_SEV[sev]
-        sc.alignment = Alignment(horizontal="center")
-        ws.cell(row=r, column=3, value=detalhe).font = BODY
+        sc.font, sc.fill, sc.alignment = BOLD, _FILL_POR_SEV[sev], CENTER
+        c3 = ws.cell(row=r, column=3, value=detalhe)
+        c3.font, c3.alignment = BODY, CENTER
         for c in range(1, 4):
             ws.cell(row=r, column=c).border = BOX
         r += 1
 
     r += 2
-    ws.cell(row=r, column=1, value=f"Documentos ≥ {config.LIMITE_ATENCAO:,.2f} (revisão manual)").font = BOLD
+    aviso = ws.cell(row=r, column=1, value=f"Documentos ≥ {config.LIMITE_ATENCAO:,.2f} (revisão manual)")
+    aviso.font, aviso.alignment = BOLD, CENTER
     r += 1
     _cabecalho(ws, r, ["Documento", "Produto", "Fornecedor", "Valor (BRL)"], [38, 14, 70, 18])
     r += 1
     for row in atencao.itertuples(index=False):
         for c, v in enumerate(row, start=1):
             cell = ws.cell(row=r, column=c, value=v)
-            cell.font, cell.border = BODY, BOX
+            cell.font, cell.border, cell.alignment = BODY, BOX, CENTER
             if c == 4:
                 cell.number_format = FMT
         r += 1
@@ -512,8 +516,8 @@ def _aba_validacoes(wb: Workbook, checks: list[tuple[str, str, str]], atencao: p
 
 def escrever_relatorio(base: pd.DataFrame, janela: "config.Janela", destino: Path) -> Path:
     """Layout de referência: Base + Resumo (fórmulas) + uma aba por
-    produto (fórmulas) + Validações. Fonte Arial 9, sem grade em todas
-    as abas."""
+    produto (fórmulas) + Validações (oculta). Fonte Aptos 9, tudo
+    centralizado horizontalmente, sem grade em todas as abas."""
     wb = Workbook()
     last = _aba_base(wb, base)
     _aba_resumo(wb, janela, base, last)
