@@ -1,0 +1,36 @@
+{
+  "name": "nordex-comparador",
+  "version": "1.0.0",
+  "description": "Interface desktop para geração do relatório de aprovação de pagamentos (Payments) a partir dos exports SAP.",
+  "main": "src/main/main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.nordex.comparador",
+    "productName": "Nordex Comparador",
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "python",
+        "to": "python",
+        "filter": ["**/*"]
+      }
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "directories": {
+      "output": "dist"
+    }
+  }
+}
