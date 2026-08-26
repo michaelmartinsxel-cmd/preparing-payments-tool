@@ -32,16 +32,27 @@ for /f "tokens=2,*" %%A in ('reg query "HKCU\Software\Microsoft\Windows\CurrentV
 
 REM ------------------------------------------------------------
 REM 3) Locais conhecidos. O WinPython guarda o interpretador em
-REM    <raiz>\python\python.exe, e a pasta raiz pode se chamar
-REM    "Python", "WPy64-<versao>", etc.
+REM    <raiz>\python\python.exe (subpasta aninhada), mas instalacoes
+REM    mais simples (ex.: python.org direto numa pasta "Python" na
+REM    Area de Trabalho) tem o .exe na raiz. Testar as duas formas.
 REM ------------------------------------------------------------
+call :testar "%DESKTOP%\Python\python.exe"
+if defined PYTHON goto :achou
 call :testar "%DESKTOP%\Python\python\python.exe"
+if defined PYTHON goto :achou
+call :testar "%USERPROFILE%\Desktop\Python\python.exe"
 if defined PYTHON goto :achou
 call :testar "%USERPROFILE%\Desktop\Python\python\python.exe"
 if defined PYTHON goto :achou
+call :testar "%USERPROFILE%\Python\python.exe"
+if defined PYTHON goto :achou
 call :testar "%USERPROFILE%\Python\python\python.exe"
 if defined PYTHON goto :achou
+if defined OneDrive call :testar "%OneDrive%\Desktop\Python\python.exe"
+if defined PYTHON goto :achou
 if defined OneDrive call :testar "%OneDrive%\Desktop\Python\python\python.exe"
+if defined PYTHON goto :achou
+if defined OneDriveCommercial call :testar "%OneDriveCommercial%\Desktop\Python\python.exe"
 if defined PYTHON goto :achou
 if defined OneDriveCommercial call :testar "%OneDriveCommercial%\Desktop\Python\python\python.exe"
 if defined PYTHON goto :achou
@@ -67,14 +78,19 @@ call :varrer "C:\"
 if defined PYTHON goto :achou
 
 REM ------------------------------------------------------------
-REM 5) Ultimo recurso: o que estiver no PATH.
+REM 5) Ultimo recurso: o que estiver no PATH. Ignorar o alias de
+REM    execucao da Microsoft Store (WindowsApps\python.exe) - ele
+REM    aparece no PATH por padrao mesmo sem Python nenhum instalado
+REM    e so mostra um aviso pra abrir a Store, nunca funciona aqui.
 REM ------------------------------------------------------------
 for /f "delims=" %%P in ('where python 2^>nul') do (
-    if not defined PYTHON set "PYTHON=%%P"
+    echo %%P | findstr /i "WindowsApps" >nul
+    if errorlevel 1 if not defined PYTHON set "PYTHON=%%P"
 )
 if defined PYTHON goto :achou
 for /f "delims=" %%P in ('where python3 2^>nul') do (
-    if not defined PYTHON set "PYTHON=%%P"
+    echo %%P | findstr /i "WindowsApps" >nul
+    if errorlevel 1 if not defined PYTHON set "PYTHON=%%P"
 )
 if defined PYTHON goto :achou
 
@@ -92,12 +108,15 @@ goto :eof
 if defined PYTHON goto :eof
 if not exist "%~1" goto :eof
 for /d %%D in ("%~1\WPy*") do (
+    if not defined PYTHON if exist "%%D\python.exe" set "PYTHON=%%D\python.exe"
     if not defined PYTHON if exist "%%D\python\python.exe" set "PYTHON=%%D\python\python.exe"
 )
 for /d %%D in ("%~1\Python*") do (
+    if not defined PYTHON if exist "%%D\python.exe" set "PYTHON=%%D\python.exe"
     if not defined PYTHON if exist "%%D\python\python.exe" set "PYTHON=%%D\python\python.exe"
 )
 for /d %%D in ("%~1\WinPython*") do (
+    if not defined PYTHON if exist "%%D\python.exe" set "PYTHON=%%D\python.exe"
     if not defined PYTHON if exist "%%D\python\python.exe" set "PYTHON=%%D\python\python.exe"
 )
 goto :eof
@@ -107,19 +126,19 @@ goto :eof
 echo Nao consegui localizar o python.exe automaticamente.
 echo.
 echo Procurei em:
-echo    "%DESKTOP%\Python\python\python.exe"
-echo    "%USERPROFILE%\Python\python\python.exe"
+echo    "%DESKTOP%\Python\python.exe" e "%DESKTOP%\Python\python\python.exe"
+echo    "%USERPROFILE%\Python\python.exe" e "%USERPROFILE%\Python\python\python.exe"
 echo    pastas WPy* / Python* / WinPython* na Area de Trabalho e no perfil
-echo    e tambem no PATH do sistema
+echo    e tambem no PATH do sistema (ignorando o alias da Microsoft Store)
 echo.
 echo SOLUCAO: passe o caminho do python.exe direto pra este script.
 echo No seu caso ele deve estar em algo como:
 echo.
-echo    "%DESKTOP%\Python\python\python.exe"
+echo    "%DESKTOP%\Python\python.exe"
 echo.
 echo Abra o Prompt de Comando nesta pasta e rode:
 echo.
-echo    build_exe.bat "%DESKTOP%\Python\python\python.exe"
+echo    build_exe.bat "%DESKTOP%\Python\python.exe"
 echo.
 echo (ajuste o caminho se a pasta do WinPython estiver em outro lugar -
 echo  o que importa e apontar pro python.exe de dentro dela)
@@ -152,6 +171,7 @@ echo  Gerando o executavel... ^(demora alguns minutos^)
 echo ------------------------------------------------------------
 "%PYTHON%" -m PyInstaller --noconfirm --onefile --windowed ^
     --name "NordexComparador" ^
+    --icon "assets\app-icon.ico" ^
     --add-data "assets;assets" ^
     --collect-all pandas ^
     --collect-all openpyxl ^
