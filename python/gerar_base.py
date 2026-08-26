@@ -157,9 +157,48 @@ def _banco(conta_razao: object) -> str:
     return NOME_BANCO.get(codigo, codigo)
 
 
+# Produtos cujo valor sai da soma das faturas do documento (coluna
+# "Montante (ME)" do export "Partidas individuais no Razão"), e não do
+# líquido da linha de baixa bancária. São exatamente os dois produtos que
+# o SAP identifica pelo "Texto de item" — ver _corrigir_valor_por_fatura().
+PRODUTOS_VALOR_POR_FATURA = (regras.PIX, regras.FOLHA)
+
+
+def _corrigir_valor_por_fatura(base: pd.DataFrame, valores_fatura: dict[str, float]) -> pd.DataFrame:
+    """Troca o Valor de PIX e Folha de Pagamento pela soma das faturas
+    daquele documento.
+
+    Pro resto dos produtos (TM5, Pagamento Fornecedores) o valor continua
+    sendo o da linha bancária — lá o líquido da baixa É o pagamento.
+
+    Em PIX e Folha o líquido bancário pode sair diferente do montante que
+    vai pra aprovação (a baixa compensa mais de um lançamento do dia),
+    e o que precisa bater com o portal do banco é a soma das faturas.
+
+    O sinal da linha bancária é preservado (saída de caixa = negativo), já
+    que "Montante (ME)" vem com a convenção do razão de fornecedor, que é
+    a inversa. Documento sem fatura no export (ou com soma zerada) fica
+    com o valor bancário — é o único dado que existe, e o check
+    "Folha/PIX confirmados por texto de item" já sinaliza esse caso.
+
+    Guarda o valor original em `ValorBanco` pro check da aba Validações.
+    """
+    base = base.copy()
+    base["ValorBanco"] = base["Valor"]
+    if not valores_fatura:
+        return base
+
+    soma = base["Documento"].map(valores_fatura)
+    sinal = base["Valor"].map(lambda v: -1.0 if v < 0 else 1.0)
+    usar = base["Produto"].isin(PRODUTOS_VALOR_POR_FATURA) & soma.notna() & (soma != 0)
+    base.loc[usar, "Valor"] = (soma.abs() * sinal).round(2)[usar]
+    return base
+
+
 def classificar_semana(df_banco: pd.DataFrame, df_partidas: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     refs = regras.referencias_fatura_icbrwa(df_partidas)
     textos = regras.textos_item_por_documento(df_partidas)
+    valores_fatura = regras.valores_fatura_por_documento(df_partidas)
     out = regras.classificar(df_banco, overrides=OVERRIDES_SEMANA, referencias_fatura=refs, textos_item=textos)
     out = out.assign(Banco=out[regras.CAMPOS_BRUTOS["conta_razao"]].map(_banco))
 
@@ -181,7 +220,9 @@ def classificar_semana(df_banco: pd.DataFrame, df_partidas: pd.DataFrame) -> tup
         # regra aplicada foi R4 (ICBRWA -> Folha), a classificação é um
         # palpite do padrão, não evidência — ver check na aba Validações.
         "TemFatura": out[c["documento"]].map(regras.doc_str).isin(textos.keys()),
-    }).sort_values(["Produto", "Valor"]).reset_index(drop=True)
+    })
+    limpo = _corrigir_valor_por_fatura(limpo, valores_fatura)
+    limpo = limpo.sort_values(["Produto", "Valor"]).reset_index(drop=True)
 
     # Base = o relatório "Administrar itens de fornecedor" original (22
     # colunas, o mesmo que você conferiu no print), com "Produto" e "Banco"
@@ -218,7 +259,10 @@ BOLD = Font(name=FONTE, size=9, bold=True)
 # planilha (corpo, cabeçalhos de tabela, rótulos, notas) fica em 9.
 TITLE = Font(name=FONTE, size=10, bold=True, color="1F3864")
 LABEL = Font(name=FONTE, size=9, bold=True, color="404040")
-NOTE = Font(name=FONTE, size=9, italic=True, color="808080")
+# Texto que reproduz um valor tal como veio do export SAP (Banco, Conta G/L,
+# Fonte etc., no bloco de tópicos da aba Resumo) — cinza #505050 em vez de
+# preto puro, pra diferenciar visualmente do texto redigido pelo relatório.
+INFO_SAP = Font(name=FONTE, size=9, color="505050")
 THIN = Side(style="thin", color="BFBFBF")
 BOX = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 
@@ -243,6 +287,42 @@ def _cabecalho(ws, row, cols, widths, col_inicio=1):
         cell.fill, cell.font, cell.border = H_FILL, H_FONT, BOX
         cell.alignment = Alignment(horizontal="center", vertical="center")
         ws.column_dimensions[get_column_letter(i)].width = w
+
+
+def _ancho_valor(valor: object) -> int:
+    """Estimativa de quantos caracteres um valor ocupa quando exibido no
+    Excel — usada só pra decidir largura de coluna, não precisa reproduzir
+    separador de milhar/decimal exato do Excel, só o comprimento."""
+    if valor is None or (isinstance(valor, float) and pd.isna(valor)):
+        return 0
+    if isinstance(valor, bool):
+        return len(str(valor))
+    if isinstance(valor, float):
+        return len(f"{valor:,.2f}")
+    if hasattr(valor, "strftime"):
+        return 10  # DD/MM/AAAA
+    return len(str(valor))
+
+
+def _autofit(ws, cabecalhos, colunas_valores, col_inicio=1, minimo=8, maximo=60, extra=2):
+    """Ajusta a largura de cada coluna ao maior valor REAL (cabeçalho ou
+    dado), em vez do chute fixo passado antes pra `_cabecalho`. Corrige
+    coluna larga demais pra texto curto (ex.: "Fornecedor" com 52 de
+    largura pra nomes de ~35 caracteres) sem cortar fornecedor mais longo
+    que o normal, porque o cálculo usa o dado de verdade, não uma
+    constante escolhida à mão.
+
+    `colunas_valores[i]` é a lista de valores REAIS da coluna
+    `col_inicio + i` — os dados de origem (pandas), não a fórmula do
+    Excel escrita na célula (uma fórmula como
+    "=SUMIFS(Base!$F$2:...)" tem dezenas de caracteres mas exibe um
+    número curto; calcular a largura em cima do texto da fórmula deixaria
+    a coluna enorme à toa).
+    """
+    for offset, (cab, valores) in enumerate(zip(cabecalhos, colunas_valores)):
+        col = col_inicio + offset
+        maior = max([len(cab)] + [_ancho_valor(v) for v in valores], default=len(cab))
+        ws.column_dimensions[get_column_letter(col)].width = max(minimo, min(maximo, maior + extra))
 
 
 def _linha_total(ws, row, ncols, rotulo_col, rotulo):
@@ -402,6 +482,29 @@ def _checks(
                 f"virou regra automática: {', '.join(divergentes[:5])}",
             ))
 
+    # Onde a soma das faturas mudou o valor de um PIX/Folha em relação ao
+    # líquido da linha bancária. Não é erro — é justamente a correção que
+    # _corrigir_valor_por_fatura() aplica — mas é o número que o aprovador
+    # confere contra o portal do banco, então fica listado.
+    if "ValorBanco" in base.columns:
+        alvo = base[base["Produto"].isin(PRODUTOS_VALOR_POR_FATURA)]
+        ajustados = alvo[(alvo["Valor"] - alvo["ValorBanco"]).abs() >= 0.01]
+        if ajustados.empty:
+            checks.append((
+                "Valor de Folha/PIX pela soma das faturas", "OK",
+                "soma das faturas igual ao líquido da linha bancária",
+            ))
+        else:
+            detalhe = "; ".join(
+                f"{r.Documento} ({r.Produto}) banco {r.ValorBanco:,.2f} -> faturas {r.Valor:,.2f}"
+                for r in ajustados.head(5).itertuples(index=False)
+            )
+            checks.append((
+                "Valor de Folha/PIX pela soma das faturas", "ALERTA",
+                f"{len(ajustados)} documento(s) com valor ajustado pela soma das "
+                f"faturas do export: {detalhe}",
+            ))
+
     erros_zp = regras.conferir_zp(base, "Tipo Lançamento", "Produto")
     if erros_zp:
         checks.append(("Coerência R1 (ZP -> TM5)", "BLOQUEIO", "; ".join(erros_zp)))
@@ -420,8 +523,8 @@ def _aba_base(wb: Workbook, base: pd.DataFrame) -> int:
     ws = wb.active
     ws.title = "Base"
     ws.sheet_view.showGridLines = False
-    _cabecalho(ws, 1, ["Documento", "Data", "Status", "Produto", "Fornecedor", "Valor (BRL)"],
-               [14, 12, 12, 24, 46, 16])
+    cabecalhos = ["Documento", "Data", "Status", "Produto", "Fornecedor", "Valor (BRL)"]
+    _cabecalho(ws, 1, cabecalhos, [14, 12, 12, 24, 46, 16])
     cols = ["Documento", "Posting Date", "Status", "Produto", "Vendor", "Valor"]
     for r, row in enumerate(base[cols].itertuples(index=False), start=2):
         for c, v in enumerate(row, start=1):
@@ -436,6 +539,7 @@ def _aba_base(wb: Workbook, base: pd.DataFrame) -> int:
     _linha_total(ws, last + 1, 6, 5, "Total Geral")
     tv = ws.cell(row=last + 1, column=6, value=f"=SUM(F2:F{last})")
     tv.number_format = FMT
+    _autofit(ws, cabecalhos, [base[c] for c in cols])
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = f"A1:F{last}"
     return last
@@ -447,7 +551,7 @@ def _aba_resumo(wb: Workbook, janela: "config.Janela", base: pd.DataFrame, last:
     ws["A1"] = "Relatório de Aprovação de Pagamentos"
     ws["A1"].font = TITLE
     ws.merge_cells("A1:D1")
-    ws["A2"] = f"Nordex Energy Brasil LTDA — Company Code 4690 — {janela.rotulo}"
+    ws["A2"] = janela.rotulo
     ws["A2"].font = Font(name=FONTE, size=9, color="404040")
 
     bancos = sorted(base["Banco"].dropna().unique())
@@ -463,7 +567,7 @@ def _aba_resumo(wb: Workbook, janela: "config.Janela", base: pd.DataFrame, last:
     r = 4
     for k, v in meta:
         ws.cell(row=r, column=1, value=k).font = LABEL
-        ws.cell(row=r, column=2, value=v).font = BODY
+        ws.cell(row=r, column=2, value=v).font = INFO_SAP
         r += 1
 
     r += 1
@@ -496,9 +600,24 @@ def _aba_resumo(wb: Workbook, janela: "config.Janela", base: pd.DataFrame, last:
     ws.cell(row=total_row, column=3).number_format = FMT
     ws.cell(row=total_row, column=4).number_format = PCT
 
-    ws.cell(row=total_row + 2, column=1,
-            value="Valores negativos = saída de caixa, conforme export SAP. "
-                  "Totais calculados por fórmula sobre a aba Base.").font = NOTE
+    # Larguras: colunas A/B servem tanto pro bloco de tópicos (rótulo/valor)
+    # quanto pra tabela "Resumo por produto" (Produto/Qtd.) — usa o maior
+    # valor real dos dois usos. C/D só existem na tabela. Contagem e soma
+    # aqui são calculadas direto do `base` (não lidas das fórmulas da
+    # célula) só pra estimar a largura.
+    por_produto = base.groupby("Produto")["Valor"].agg(["count", "sum"]).reindex(produtos, fill_value=0)
+    total_valor = por_produto["sum"].sum()
+    percentuais = (por_produto["sum"] / total_valor if total_valor else por_produto["sum"] * 0).tolist() + [1.0]
+    _autofit(
+        ws,
+        ["Produto", "Qtd. documentos", "Valor (BRL)", "% do total"],
+        [
+            [k for k, _ in meta] + list(produtos) + ["Total Geral"],
+            [v for _, v in meta] + por_produto["count"].tolist() + [por_produto["count"].sum()],
+            por_produto["sum"].tolist() + [total_valor],
+            percentuais,
+        ],
+    )
 
 
 def _aba_produto(wb: Workbook, produto: str, base: pd.DataFrame, janela: "config.Janela", last: int) -> None:
@@ -540,6 +659,15 @@ def _aba_produto(wb: Workbook, produto: str, base: pd.DataFrame, janela: "config
     _linha_total(ws, tt, 3, 1, "Total Geral")
     ws.cell(row=tt, column=2).alignment = Alignment(horizontal="center")
     ws.cell(row=tt, column=3).number_format = FMT
+    _autofit(
+        ws,
+        ["Fornecedor", "Qtd. documentos", "Valor (BRL)"],
+        [
+            list(sub["Vendor"]) + ["Total Geral"],
+            list(sub["Qtd"]) + [sub["Qtd"].sum()],
+            list(sub["Valor"]) + [sub["Valor"].sum()],
+        ],
+    )
     ws.freeze_panes = "A4"
 
 
@@ -575,6 +703,24 @@ def _aba_validacoes(wb: Workbook, checks: list[tuple[str, str, str]], atencao: p
             if c == 4:
                 cell.number_format = FMT
         r += 1
+
+    # Colunas A-C são compartilhadas pelas duas tabelas desta aba (Check/
+    # Severidade/Detalhe e Documento/Produto/Fornecedor) — usa o maior
+    # valor real das duas. `Detalhe` pode ter mensagem de validação longa
+    # (lista vários documentos), por isso o teto de largura é maior aqui
+    # do que o padrão.
+    _autofit(
+        ws,
+        [max(("Check", "Documento"), key=len), max(("Severidade", "Produto"), key=len),
+         max(("Detalhe", "Fornecedor"), key=len), "Valor (BRL)"],
+        [
+            [c for c, _, _ in checks] + list(atencao["Documento"]),
+            [s for _, s, _ in checks] + list(atencao["Produto"]),
+            [d for _, _, d in checks] + list(atencao["Fornecedor"]),
+            list(atencao["Valor"]),
+        ],
+        maximo=90,
+    )
 
     # Oculta sempre — é log técnico pra auditoria, não pro corpo do e-mail
     # de aprovação. Continua no arquivo (Ctrl+Shift+F11 reexibe), só não
