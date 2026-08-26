@@ -259,6 +259,10 @@ BOLD = Font(name=FONTE, size=9, bold=True)
 # planilha (corpo, cabeçalhos de tabela, rótulos, notas) fica em 9.
 TITLE = Font(name=FONTE, size=10, bold=True, color="1F3864")
 LABEL = Font(name=FONTE, size=9, bold=True, color="404040")
+# Texto que reproduz um valor tal como veio do export SAP (Banco, Conta G/L,
+# Fonte etc., no bloco de tópicos da aba Resumo) — cinza #505050 em vez de
+# preto puro, pra diferenciar visualmente do texto redigido pelo relatório.
+INFO_SAP = Font(name=FONTE, size=9, color="505050")
 NOTE = Font(name=FONTE, size=9, italic=True, color="808080")
 THIN = Side(style="thin", color="BFBFBF")
 BOX = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
@@ -511,7 +515,7 @@ def _aba_resumo(wb: Workbook, janela: "config.Janela", base: pd.DataFrame, last:
     ws["A1"] = "Relatório de Aprovação de Pagamentos"
     ws["A1"].font = TITLE
     ws.merge_cells("A1:D1")
-    ws["A2"] = f"Nordex Energy Brasil LTDA — Company Code 4690 — {janela.rotulo}"
+    ws["A2"] = janela.rotulo
     ws["A2"].font = Font(name=FONTE, size=9, color="404040")
 
     bancos = sorted(base["Banco"].dropna().unique())
@@ -527,7 +531,7 @@ def _aba_resumo(wb: Workbook, janela: "config.Janela", base: pd.DataFrame, last:
     r = 4
     for k, v in meta:
         ws.cell(row=r, column=1, value=k).font = LABEL
-        ws.cell(row=r, column=2, value=v).font = BODY
+        ws.cell(row=r, column=2, value=v).font = INFO_SAP
         r += 1
 
     r += 1
