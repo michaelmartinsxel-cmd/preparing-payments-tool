@@ -143,7 +143,9 @@ Com esses filtros o export saiu com 482 linhas e a aba Validações fechou com
 confirmado por código do fornecedor + mensagem no texto, sem palpite.
 
 **Partidas individuais no Razão**: mesma janela de pagamento; é dele que sai a
-linha bancária (KZ) que define o valor de cada documento.
+linha bancária (KZ) que define o valor de cada documento — exceto Folha de
+Pagamento e PIX, cujo valor vem da soma das faturas (ver "Valor de Folha de
+Pagamento e PIX" mais abaixo).
 
 Se algum dia o export vier incompleto, o relatório continua saindo com os
 valores certos (a linha bancária vem do outro arquivo), mas a aba Validações
@@ -158,6 +160,39 @@ SAP), o painel de erro da interface mostra só a mensagem clara, não o
 traceback inteiro do Python. O traceback completo continua indo pro console
 (que abre automaticamente quando dá erro), pra quem precisar depurar mais a
 fundo.
+
+## Valor de Folha de Pagamento e PIX
+
+O `Valor` desses dois produtos vem da **soma das faturas do documento** —
+coluna `Montante (ME)` do export "Partidas individuais no Razão", somando
+todas as linhas com aquele `Lançto.compensação` — e não do líquido da linha
+de baixa bancária (`Mont.moeda empresa`). São exatamente os dois produtos
+que o SAP identifica pelo `Texto de item`, e o montante que vai pra
+aprovação é o das faturas: a baixa bancária pode vir compensada com outros
+lançamentos do mesmo dia e sair diferente do que o portal do banco mostra
+pra aprovar.
+
+`TM5` e `Pagamento Fornecedores` continuam com o valor da linha bancária —
+neles o líquido da baixa é o próprio pagamento.
+
+Detalhes do comportamento:
+
+- A linha de pagamento (a que se compensa a si mesma, `Lançamento contábil`
+  = `Lançto.compensação`) fica de fora da soma; ela é a contrapartida das
+  faturas e zeraria o total.
+- O sinal da linha bancária é preservado (saída de caixa continua
+  negativa), já que `Montante (ME)` vem com a convenção invertida do razão
+  de fornecedor.
+- Documento sem fatura no export — ou export reduzido, sem a coluna
+  `Montante (ME)` — mantém o valor bancário, que é o único dado
+  disponível. O check "Folha/PIX confirmados por texto de item" já sinaliza
+  esse caso.
+- A aba `Validações` traz o check **"Valor de Folha/PIX pela soma das
+  faturas"**: `OK` quando os dois números batem, `ALERTA` listando
+  documento, valor do banco e valor das faturas quando o ajuste mudou
+  algum valor.
+- Isso **não** divide documento entre produtos — cada documento continua
+  inteiro num produto só; só muda de onde sai o valor.
 
 ## Referência circular no `.xlsx` gerado
 

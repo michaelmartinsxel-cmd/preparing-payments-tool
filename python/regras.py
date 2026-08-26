@@ -145,6 +145,31 @@ HISTORICO DO MARCADOR   : confirmado pelo usuário em 19.08.2026 — o
                           código de fornecedor precisa continuar existindo —
                           torná-lo obrigatório erraria R$93 mil nessa semana.
 
+VALOR DE FOLHA/PIX      : o Valor desses dois produtos NÃO vem da linha
+                          de baixa bancária ("Mont.moeda empresa"), e sim
+                          da SOMA de todas as faturas que aquele documento
+                          compensa — coluna "Montante (ME)" do relatório
+                          "Partidas individuais no Razão", agrupada por
+                          Lançto.compensação. São os dois produtos que o
+                          SAP identifica pelo "Texto de item", e o montante
+                          que vai pra aprovação é o das faturas: o líquido
+                          da baixa pode vir compensado com outros
+                          lançamentos do dia e sair diferente do que o
+                          portal do banco mostra.
+
+                          TM5 e Pagamento Fornecedores continuam com o
+                          valor da linha bancária — lá o líquido da baixa É
+                          o pagamento.
+
+                          Ver `valores_fatura_por_documento()` e
+                          `gerar_base._corrigir_valor_por_fatura()`. Sem
+                          fatura no export (ou export reduzido, sem a
+                          coluna de montante) o valor bancário continua
+                          valendo, e a aba Validações lista todo documento
+                          em que os dois números divergem. Isso NÃO divide
+                          documento entre produtos — ver NAO AUTOMATIZAR
+                          acima; só troca a fonte do valor.
+
 Antes de usar `classificar()` em produção, MODO_CLASSIFICACAO precisa
 estar True — ligar só depois de confirmar CAMPOS_BRUTOS contra o export
 real da semana.
@@ -256,14 +281,16 @@ CADEIA: tuple[Regra, ...] = (
 FALLBACK = FORNECEDORES
 
 # Nomes de campo reais no export "Partidas individuais no Razão"
-# (aba "Exportação SAPUI5", 22 colunas). Usado só pra achar a referência
-# da fatura de cada lançamento ICBRWA, via join por Lançto.compensação.
+# (aba "Exportação SAPUI5", 22 colunas). Usado pra achar a referência
+# da fatura de cada lançamento ICBRWA e o "Texto de item"/"Montante (ME)"
+# das faturas de cada pagamento, via join por Lançto.compensação.
 CAMPOS_PARTIDAS: dict[str, str] = {
     "documento_fatura": "Lançamento contábil",
     "fornecedor": "Fornecedor",
     "referencia": "Referência",
     "lancto_compensacao": "Lançto.compensação",
     "texto_item": "Texto de item",
+    "montante": "Montante (ME)",
 }
 
 TOKEN_PIX_TEXTO_ITEM = "PIX"
@@ -394,6 +421,45 @@ def textos_item_por_documento(df_partidas: pd.DataFrame) -> dict[str, str]:
         if doc_pagamento and doc_pagamento != "None" and t:
             out[doc_pagamento] = t
     return out
+
+
+def valores_fatura_por_documento(df_partidas: pd.DataFrame) -> dict[str, float]:
+    """Soma, pra cada documento de PAGAMENTO (Lançto.compensação), o
+    "Montante (ME)" de TODAS as faturas que aquele pagamento compensa no
+    relatório "Partidas individuais no Razão".
+
+    É a fonte do valor de Folha de Pagamento e PIX (ver
+    `gerar_base._corrigir_valor_por_fatura`). Nesses dois produtos o
+    montante que precisa ir pra aprovação é o das faturas identificadas
+    pelo "Texto de item", não o líquido da linha de baixa bancária —
+    que pode vir compensado com outros lançamentos do mesmo dia e sair
+    diferente do que o portal do banco mostra pra aprovar.
+
+    A linha de pagamento (a que se compensa a si mesma) fica de fora, pelo
+    mesmo motivo de `textos_item_por_documento()`: ela é a contrapartida
+    das faturas e zeraria a soma.
+
+    Devolve {} quando o export veio sem a coluna de montante (o SAP já
+    mandou variantes reduzidas deste relatório) — aí o valor da linha
+    bancária continua valendo, como antes.
+    """
+    comp = CAMPOS_PARTIDAS["lancto_compensacao"]
+    montante = CAMPOS_PARTIDAS["montante"]
+    if comp not in df_partidas.columns or montante not in df_partidas.columns:
+        return {}
+
+    out: dict[str, float] = {}
+    for _, linha in df_partidas.iterrows():
+        if _e_linha_de_pagamento(linha):
+            continue
+        doc_pagamento = doc_str(linha.get(comp, ""))
+        if not doc_pagamento or doc_pagamento == "None":
+            continue
+        valor = pd.to_numeric(linha.get(montante), errors="coerce")
+        if pd.isna(valor):
+            continue
+        out[doc_pagamento] = out.get(doc_pagamento, 0.0) + float(valor)
+    return {doc: round(v, 2) for doc, v in out.items()}
 
 
 def referencias_fatura_icbrwa(df_partidas: pd.DataFrame) -> dict[str, str]:

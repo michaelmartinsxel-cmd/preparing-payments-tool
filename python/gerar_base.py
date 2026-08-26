@@ -157,9 +157,48 @@ def _banco(conta_razao: object) -> str:
     return NOME_BANCO.get(codigo, codigo)
 
 
+# Produtos cujo valor sai da soma das faturas do documento (coluna
+# "Montante (ME)" do export "Partidas individuais no Razão"), e não do
+# líquido da linha de baixa bancária. São exatamente os dois produtos que
+# o SAP identifica pelo "Texto de item" — ver _corrigir_valor_por_fatura().
+PRODUTOS_VALOR_POR_FATURA = (regras.PIX, regras.FOLHA)
+
+
+def _corrigir_valor_por_fatura(base: pd.DataFrame, valores_fatura: dict[str, float]) -> pd.DataFrame:
+    """Troca o Valor de PIX e Folha de Pagamento pela soma das faturas
+    daquele documento.
+
+    Pro resto dos produtos (TM5, Pagamento Fornecedores) o valor continua
+    sendo o da linha bancária — lá o líquido da baixa É o pagamento.
+
+    Em PIX e Folha o líquido bancário pode sair diferente do montante que
+    vai pra aprovação (a baixa compensa mais de um lançamento do dia),
+    e o que precisa bater com o portal do banco é a soma das faturas.
+
+    O sinal da linha bancária é preservado (saída de caixa = negativo), já
+    que "Montante (ME)" vem com a convenção do razão de fornecedor, que é
+    a inversa. Documento sem fatura no export (ou com soma zerada) fica
+    com o valor bancário — é o único dado que existe, e o check
+    "Folha/PIX confirmados por texto de item" já sinaliza esse caso.
+
+    Guarda o valor original em `ValorBanco` pro check da aba Validações.
+    """
+    base = base.copy()
+    base["ValorBanco"] = base["Valor"]
+    if not valores_fatura:
+        return base
+
+    soma = base["Documento"].map(valores_fatura)
+    sinal = base["Valor"].map(lambda v: -1.0 if v < 0 else 1.0)
+    usar = base["Produto"].isin(PRODUTOS_VALOR_POR_FATURA) & soma.notna() & (soma != 0)
+    base.loc[usar, "Valor"] = (soma.abs() * sinal).round(2)[usar]
+    return base
+
+
 def classificar_semana(df_banco: pd.DataFrame, df_partidas: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     refs = regras.referencias_fatura_icbrwa(df_partidas)
     textos = regras.textos_item_por_documento(df_partidas)
+    valores_fatura = regras.valores_fatura_por_documento(df_partidas)
     out = regras.classificar(df_banco, overrides=OVERRIDES_SEMANA, referencias_fatura=refs, textos_item=textos)
     out = out.assign(Banco=out[regras.CAMPOS_BRUTOS["conta_razao"]].map(_banco))
 
@@ -181,7 +220,9 @@ def classificar_semana(df_banco: pd.DataFrame, df_partidas: pd.DataFrame) -> tup
         # regra aplicada foi R4 (ICBRWA -> Folha), a classificação é um
         # palpite do padrão, não evidência — ver check na aba Validações.
         "TemFatura": out[c["documento"]].map(regras.doc_str).isin(textos.keys()),
-    }).sort_values(["Produto", "Valor"]).reset_index(drop=True)
+    })
+    limpo = _corrigir_valor_por_fatura(limpo, valores_fatura)
+    limpo = limpo.sort_values(["Produto", "Valor"]).reset_index(drop=True)
 
     # Base = o relatório "Administrar itens de fornecedor" original (22
     # colunas, o mesmo que você conferiu no print), com "Produto" e "Banco"
@@ -400,6 +441,29 @@ def _checks(
                 f"{len(divergentes)} documento(s) com 'Folha' no texto de item, mas "
                 f"classificado(s) como outro produto — conferir se é caso novo, ainda não "
                 f"virou regra automática: {', '.join(divergentes[:5])}",
+            ))
+
+    # Onde a soma das faturas mudou o valor de um PIX/Folha em relação ao
+    # líquido da linha bancária. Não é erro — é justamente a correção que
+    # _corrigir_valor_por_fatura() aplica — mas é o número que o aprovador
+    # confere contra o portal do banco, então fica listado.
+    if "ValorBanco" in base.columns:
+        alvo = base[base["Produto"].isin(PRODUTOS_VALOR_POR_FATURA)]
+        ajustados = alvo[(alvo["Valor"] - alvo["ValorBanco"]).abs() >= 0.01]
+        if ajustados.empty:
+            checks.append((
+                "Valor de Folha/PIX pela soma das faturas", "OK",
+                "soma das faturas igual ao líquido da linha bancária",
+            ))
+        else:
+            detalhe = "; ".join(
+                f"{r.Documento} ({r.Produto}) banco {r.ValorBanco:,.2f} -> faturas {r.Valor:,.2f}"
+                for r in ajustados.head(5).itertuples(index=False)
+            )
+            checks.append((
+                "Valor de Folha/PIX pela soma das faturas", "ALERTA",
+                f"{len(ajustados)} documento(s) com valor ajustado pela soma das "
+                f"faturas do export: {detalhe}",
             ))
 
     erros_zp = regras.conferir_zp(base, "Tipo Lançamento", "Produto")
