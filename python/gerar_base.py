@@ -205,7 +205,7 @@ def classificar_semana(df_banco: pd.DataFrame, df_partidas: pd.DataFrame) -> tup
 
 FMT = "#,##0.00;-#,##0.00;-"
 PCT = "0.0%"
-FONTE = "Aptos"
+FONTE = "Arial"
 CENTER = Alignment(horizontal="center")
 H_FILL = PatternFill("solid", fgColor="1F3864")
 H_FONT = Font(name=FONTE, size=9, bold=True, color="FFFFFF")
@@ -516,7 +516,7 @@ def _aba_validacoes(wb: Workbook, checks: list[tuple[str, str, str]], atencao: p
 
 def escrever_relatorio(base: pd.DataFrame, janela: "config.Janela", destino: Path) -> Path:
     """Layout de referência: Base + Resumo (fórmulas) + uma aba por
-    produto (fórmulas) + Validações (oculta). Fonte Aptos 9, tudo
+    produto (fórmulas) + Validações (oculta). Fonte Arial 9, tudo
     centralizado horizontalmente, sem grade em todas as abas."""
     wb = Workbook()
     last = _aba_base(wb, base)
