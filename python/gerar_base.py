@@ -46,8 +46,10 @@ import regras
 # Ver docstring de regras.classificar() pros casos já documentados.
 # ============================================================
 OVERRIDES_SEMANA: dict[str, str] = {
-    "1300005654": "PIX",                     # BESSA SERVICOS — PIX avulso
-    "1300005682": "Pagamento Fornecedores",  # Folha paga via PIX (sigilo)
+    # Semana 26.08.2026: vazio de propósito. Os dois PIX da Caixa
+    # (1300006362 e 1300006404, R$ 57.923,24) são pegos automaticamente pela
+    # R3, depois que `regras.e_marcador_pix()` passou a aceitar o formato
+    # "PIX | GDF_20025 - 08_2026". Não precisam de exceção manual.
     # Exemplo de exclusão de duplicidade (semana de 15.07.2026):
     # "1300005522": regras.EXCLUIDO,  # duplicava pagamento já em TM5
     # "1300005270": "Pagamento Fornecedores",  # ICBRWA sem PEN, não é Folha
@@ -206,13 +208,15 @@ def classificar_semana(df_banco: pd.DataFrame, df_partidas: pd.DataFrame) -> tup
 FMT = "#,##0.00;-#,##0.00;-"
 PCT = "0.0%"
 FONTE = "Aptos"
-CENTER = Alignment(horizontal="center")
+CENTRO = Alignment(horizontal="center", vertical="center")
 H_FILL = PatternFill("solid", fgColor="1F3864")
 H_FONT = Font(name=FONTE, size=9, bold=True, color="FFFFFF")
 T_FILL = PatternFill("solid", fgColor="D9E1F2")
 BODY = Font(name=FONTE, size=9)
 BOLD = Font(name=FONTE, size=9, bold=True)
-TITLE = Font(name=FONTE, size=9, bold=True, color="1F3864")
+# Só o título da linha 1 de cada aba usa tamanho 10 — todo o resto da
+# planilha (corpo, cabeçalhos de tabela, rótulos, notas) fica em 9.
+TITLE = Font(name=FONTE, size=10, bold=True, color="1F3864")
 LABEL = Font(name=FONTE, size=9, bold=True, color="404040")
 NOTE = Font(name=FONTE, size=9, italic=True, color="808080")
 THIN = Side(style="thin", color="BFBFBF")
@@ -245,10 +249,14 @@ def _linha_total(ws, row, ncols, rotulo_col, rotulo):
     ws.cell(row=row, column=rotulo_col, value=rotulo)
     for c in range(1, ncols + 1):
         cell = ws.cell(row=row, column=c)
-        cell.font, cell.fill, cell.border, cell.alignment = BOLD, T_FILL, BOX, CENTER
+        cell.font, cell.fill, cell.border = BOLD, T_FILL, BOX
 
 
-def _checks(base: pd.DataFrame, janela: "config.Janela") -> list[tuple[str, str, str]]:
+def _checks(
+    base: pd.DataFrame,
+    janela: "config.Janela",
+    textos_item: dict | None = None,
+) -> list[tuple[str, str, str]]:
     """(check, severidade, detalhe) — espelha validacoes.py, adaptado pra
     ler direto do `limpo` (Company Code/Documento/Data etc. em vez do
     fluxo antigo baseado em Payments <data>.xlsx já classificado)."""
@@ -341,6 +349,59 @@ def _checks(base: pd.DataFrame, janela: "config.Janela") -> list[tuple[str, str,
                 f"código do fornecedor, sem mensagem pra confirmar: {detalhe}",
             ))
 
+    # Contraprova do check acima. Aquele só olha o que JÁ foi classificado como
+    # Folha/PIX, então fica "OK" justamente quando NENHUM documento virou PIX —
+    # foi o que aconteceu em 26.08.2026: PIX zerado, R$ 57.923,24 dentro de
+    # Pagamento Fornecedores, e o log inteiro verde. Aqui a pergunta é a
+    # inversa: o export trouxe "Texto de item" marcado como PIX que não virou
+    # documento PIX nenhum? Documento com exceção manual em OVERRIDES_SEMANA
+    # fica de fora — ali a classificação é uma decisão consciente.
+    if textos_item is not None:
+        docs_pix_export = {
+            str(doc) for doc, textos in textos_item.items()
+            if regras.e_marcador_pix(textos)
+        }
+        docs_pix_saida = set(base.loc[base["Produto"] == "PIX", "Documento"].astype(str))
+        perdidos = sorted(docs_pix_export - docs_pix_saida - set(OVERRIDES_SEMANA))
+        if not docs_pix_export:
+            checks.append((
+                "PIX do export virou produto PIX", "OK",
+                "nenhum texto de item marcado como PIX neste export",
+            ))
+        elif perdidos:
+            checks.append((
+                "PIX do export virou produto PIX", "BLOQUEIO",
+                f"{len(perdidos)} documento(s) com 'PIX' no texto de item classificado(s) "
+                f"como outro produto: {', '.join(perdidos[:5])}",
+            ))
+        else:
+            checks.append((
+                "PIX do export virou produto PIX", "OK",
+                f"{len(docs_pix_export)} documento(s) com PIX no texto, todos classificados",
+            ))
+
+        # Mesma pergunta pro marcador de Folha — mas SÓ como alerta, não
+        # BLOQUEIO. Diferente do PIX (docs 1300006362/1300006404 confirmados
+        # contra o portal do banco), ainda não vi nenhum documento real com
+        # "Folha de Pagamento"/"Folha de Pgto" no Texto de item — hoje a R4
+        # classifica Folha só pelo fornecedor ICBRWA. Se aparecer aqui, é
+        # sinal de que o SAP começou a marcar Folha do mesmo jeito que PIX,
+        # e a regra pode precisar de uma R3-Folha real — mas até ter um caso
+        # confirmado, é só sinalização pra conferência manual.
+        docs_folha_export = {
+            str(doc) for doc, textos in textos_item.items()
+            if regras.e_marcador_folha(textos)
+        }
+        docs_folha_saida = set(base.loc[base["Produto"] == regras.FOLHA, "Documento"].astype(str))
+        divergentes = sorted(docs_folha_export - docs_folha_saida - set(OVERRIDES_SEMANA))
+        if divergentes:
+            checks.append((
+                "Marcador de Folha no texto (informativo)", "ALERTA",
+                f"{len(divergentes)} documento(s) com 'Folha' no texto de item, mas "
+                f"classificado(s) como outro produto — conferir se é caso novo, ainda não "
+                f"virou regra automática: {', '.join(divergentes[:5])}",
+            ))
+
     erros_zp = regras.conferir_zp(base, "Tipo Lançamento", "Produto")
     if erros_zp:
         checks.append(("Coerência R1 (ZP -> TM5)", "BLOQUEIO", "; ".join(erros_zp)))
@@ -365,15 +426,16 @@ def _aba_base(wb: Workbook, base: pd.DataFrame) -> int:
     for r, row in enumerate(base[cols].itertuples(index=False), start=2):
         for c, v in enumerate(row, start=1):
             cell = ws.cell(row=r, column=c, value=v)
-            cell.font, cell.border, cell.alignment = BODY, BOX, CENTER
+            cell.font, cell.border = BODY, BOX
             if c == 2:
                 cell.number_format = "DD/MM/YYYY"
+                cell.alignment = Alignment(horizontal="center")
             if c == 6:
                 cell.number_format = FMT
     last = len(base) + 1
     _linha_total(ws, last + 1, 6, 5, "Total Geral")
     tv = ws.cell(row=last + 1, column=6, value=f"=SUM(F2:F{last})")
-    tv.number_format, tv.alignment = FMT, CENTER
+    tv.number_format = FMT
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = f"A1:F{last}"
     return last
@@ -384,6 +446,7 @@ def _aba_resumo(wb: Workbook, janela: "config.Janela", base: pd.DataFrame, last:
     ws.sheet_view.showGridLines = False
     ws["A1"] = "Relatório de Aprovação de Pagamentos"
     ws["A1"].font = TITLE
+    ws.merge_cells("A1:D1")
     ws["A2"] = f"Nordex Energy Brasil LTDA — Company Code 4690 — {janela.rotulo}"
     ws["A2"].font = Font(name=FONTE, size=9, color="404040")
 
@@ -404,9 +467,8 @@ def _aba_resumo(wb: Workbook, janela: "config.Janela", base: pd.DataFrame, last:
         r += 1
 
     r += 1
-    titulo = ws.cell(row=r, column=1, value="Resumo por produto")
-    titulo.font = Font(name=FONTE, size=10, bold=True)
-    titulo.alignment = Alignment(horizontal="center", vertical="center")
+    ws.cell(row=r, column=1, value="Resumo por produto").font = Font(name=FONTE, size=9, bold=True)
+    ws.merge_cells(f"A{r}:D{r}")
     r += 1
     _cabecalho(ws, r, ["Produto", "Qtd. documentos", "Valor (BRL)", "% do total"], [30, 18, 18, 12])
 
@@ -420,8 +482,9 @@ def _aba_resumo(wb: Workbook, janela: "config.Janela", base: pd.DataFrame, last:
         ws.cell(row=rr, column=3, value=f"=SUMIF(Base!$D$2:$D${last},$A{rr},Base!$F$2:$F${last})")
         ws.cell(row=rr, column=4, value=f"=IFERROR(C{rr}/$C${total_row},0)")
         for c in range(1, 5):
-            cell = ws.cell(row=rr, column=c)
-            cell.font, cell.border, cell.alignment = BODY, BOX, CENTER
+            ws.cell(row=rr, column=c).font = BODY
+            ws.cell(row=rr, column=c).border = BOX
+        ws.cell(row=rr, column=2).alignment = Alignment(horizontal="center")
         ws.cell(row=rr, column=3).number_format = FMT
         ws.cell(row=rr, column=4).number_format = PCT
 
@@ -429,6 +492,7 @@ def _aba_resumo(wb: Workbook, janela: "config.Janela", base: pd.DataFrame, last:
     ws.cell(row=total_row, column=3, value=f"=SUM(C{first}:C{total_row - 1})")
     ws.cell(row=total_row, column=4, value=1)
     _linha_total(ws, total_row, 4, 1, "Total Geral")
+    ws.cell(row=total_row, column=2).alignment = Alignment(horizontal="center")
     ws.cell(row=total_row, column=3).number_format = FMT
     ws.cell(row=total_row, column=4).number_format = PCT
 
@@ -449,13 +513,12 @@ def _aba_produto(wb: Workbook, produto: str, base: pd.DataFrame, janela: "config
     ws.sheet_view.showGridLines = False
     ws["A1"] = produto
     ws["A1"].font = TITLE
-    ws["A1"].alignment = CENTER
-    ws["A2"] = f"Posting Date {janela.rotulo} · Status Pendentes"
-    ws["A2"].font = NOTE
-    ws["A2"].alignment = CENTER
-    _cabecalho(ws, 4, ["Fornecedor", "Qtd. documentos", "Valor (BRL)"], [52, 18, 18])
+    ws.merge_cells("A1:C1")
+    # Linha 2 fica em branco de propósito — padrão fixo: título, pula uma
+    # linha, tabela. Sem legenda de Posting Date/Status aqui.
+    _cabecalho(ws, 3, ["Fornecedor", "Qtd. documentos", "Valor (BRL)"], [52, 18, 18])
 
-    f0 = 5
+    f0 = 4
     for i, row in enumerate(sub.itertuples(index=False)):
         rr = f0 + i
         ws.cell(row=rr, column=1, value=row.Vendor)
@@ -466,65 +529,93 @@ def _aba_produto(wb: Workbook, produto: str, base: pd.DataFrame, janela: "config
                   f"Base!$E$2:$E${last},$A{rr})",
         )
         for c in range(1, 4):
-            cell = ws.cell(row=rr, column=c)
-            cell.font, cell.border, cell.alignment = BODY, BOX, CENTER
+            ws.cell(row=rr, column=c).font = BODY
+            ws.cell(row=rr, column=c).border = BOX
+        ws.cell(row=rr, column=2).alignment = Alignment(horizontal="center")
         ws.cell(row=rr, column=3).number_format = FMT
 
     tt = f0 + len(sub)
     ws.cell(row=tt, column=2, value=f"=SUM(B{f0}:B{tt - 1})")
     ws.cell(row=tt, column=3, value=f"=SUM(C{f0}:C{tt - 1})")
     _linha_total(ws, tt, 3, 1, "Total Geral")
+    ws.cell(row=tt, column=2).alignment = Alignment(horizontal="center")
     ws.cell(row=tt, column=3).number_format = FMT
-    ws.freeze_panes = "A5"
+    ws.freeze_panes = "A4"
 
 
 def _aba_validacoes(wb: Workbook, checks: list[tuple[str, str, str]], atencao: pd.DataFrame) -> None:
     ws = wb.create_sheet("Validações")
     ws.sheet_view.showGridLines = False
-    ws.sheet_state = "hidden"
     ws["A1"] = "Log de validação"
     ws["A1"].font = TITLE
-    ws["A1"].alignment = CENTER
+    ws.merge_cells("A1:C1")
     _cabecalho(ws, 3, ["Check", "Severidade", "Detalhe"], [38, 14, 70])
 
     r = 4
     for check, sev, detalhe in checks:
-        c1 = ws.cell(row=r, column=1, value=check)
-        c1.font, c1.alignment = BODY, CENTER
+        ws.cell(row=r, column=1, value=check).font = BODY
         sc = ws.cell(row=r, column=2, value=sev)
-        sc.font, sc.fill, sc.alignment = BOLD, _FILL_POR_SEV[sev], CENTER
-        c3 = ws.cell(row=r, column=3, value=detalhe)
-        c3.font, c3.alignment = BODY, CENTER
+        sc.font, sc.fill = BOLD, _FILL_POR_SEV[sev]
+        sc.alignment = Alignment(horizontal="center")
+        ws.cell(row=r, column=3, value=detalhe).font = BODY
         for c in range(1, 4):
             ws.cell(row=r, column=c).border = BOX
         r += 1
 
     r += 2
-    aviso = ws.cell(row=r, column=1, value=f"Documentos ≥ {config.LIMITE_ATENCAO:,.2f} (revisão manual)")
-    aviso.font, aviso.alignment = BOLD, CENTER
+    ws.cell(row=r, column=1, value=f"Documentos ≥ {config.LIMITE_ATENCAO:,.2f} (revisão manual)").font = BOLD
+    ws.merge_cells(f"A{r}:D{r}")
     r += 1
     _cabecalho(ws, r, ["Documento", "Produto", "Fornecedor", "Valor (BRL)"], [38, 14, 70, 18])
     r += 1
     for row in atencao.itertuples(index=False):
         for c, v in enumerate(row, start=1):
             cell = ws.cell(row=r, column=c, value=v)
-            cell.font, cell.border, cell.alignment = BODY, BOX, CENTER
+            cell.font, cell.border = BODY, BOX
             if c == 4:
                 cell.number_format = FMT
         r += 1
 
+    # Oculta sempre — é log técnico pra auditoria, não pro corpo do e-mail
+    # de aprovação. Continua no arquivo (Ctrl+Shift+F11 reexibe), só não
+    # aparece de cara ao abrir.
+    ws.sheet_state = "hidden"
 
-def escrever_relatorio(base: pd.DataFrame, janela: "config.Janela", destino: Path) -> Path:
+
+def _centralizar_tudo(wb: Workbook) -> None:
+    """Centraliza (horizontal e vertical) toda célula usada, em toda aba —
+    inclusive as visualmente ocultas (ex.: Validações). Passe único no final,
+    depois que as abas e as mesclagens já existem: alinhar célula fundida
+    funciona pela âncora (canto superior esquerdo), então mesclar antes de
+    centralizar dá o mesmo resultado que centralizar antes de mesclar — mas
+    rodar por último aqui garante que nenhuma escrita posterior perca o
+    centro por esquecimento pontual em algum ponto do código acima."""
+    for ws in wb.worksheets:
+        for linha in ws.iter_rows():
+            for celula in linha:
+                celula.alignment = CENTRO
+
+
+def escrever_relatorio(
+    base: pd.DataFrame,
+    janela: "config.Janela",
+    destino: Path,
+    textos_item: dict | None = None,
+) -> Path:
     """Layout de referência: Base + Resumo (fórmulas) + uma aba por
-    produto (fórmulas) + Validações (oculta). Fonte Aptos 9, tudo
-    centralizado horizontalmente, sem grade em todas as abas."""
+    produto (fórmulas) + Validações. Fonte Arial 9, sem grade em todas
+    as abas.
+
+    `textos_item` é o mapa documento -> "Texto de item" vindo de
+    `regras.textos_item_por_documento()`. Opcional: sem ele o log de
+    validação sai igual ao de antes, só sem o check de PIX perdido."""
     wb = Workbook()
     last = _aba_base(wb, base)
     _aba_resumo(wb, janela, base, last)
     for produto in ("Folha de Pagamento", "PIX", "Pagamento Fornecedores", "TM5"):
         _aba_produto(wb, produto, base, janela, last)
 
-    checks = _checks(base, janela)
+    checks = _checks(base, janela, textos_item)
     atencao = (
         base[base["Valor"].abs() >= config.LIMITE_ATENCAO]
         .sort_values("Valor")
@@ -533,6 +624,8 @@ def escrever_relatorio(base: pd.DataFrame, janela: "config.Janela", destino: Pat
         .reset_index(drop=True)
     )
     _aba_validacoes(wb, checks, atencao)
+
+    _centralizar_tudo(wb)
 
     destino.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -758,7 +851,10 @@ def main(argv: list[str] | None = None) -> int:
         / data_analise.strftime("%Y-%m-%d")
         / f"Payments_{data_analise.strftime('%d.%m.%Y')}.xlsx"
     )
-    caminho = escrever_relatorio(base, janela, destino)
+    caminho = escrever_relatorio(
+        base, janela, destino,
+        textos_item=regras.textos_item_por_documento(df_partidas),
+    )
     print(f"\nArquivo: {caminho}")
     return 0
 

@@ -39,6 +39,21 @@ R5 (Caixa -> PIX/FGTS)  : VERIFICADA contra a base aprovada de 12.08.2026.
                           zero) não têm linha de fatura no export e caem
                           aqui pelo padrão — igual à planilha aprovada.
 
+FORMATO DO MARCADOR PIX : mudou em 26.08.2026. Era o texto exato "PIX";
+                          passou a vir "PIX | <referência da guia>", ex.
+                          "PIX | GDF_20025 - 08_2026". A comparação por
+                          igualdade exata parou de casar e a R3 deixou de
+                          disparar; como a R5b usa o mesmo critério
+                          invertido, os documentos da Caixa foram parar em
+                          Pagamento Fornecedores. Resultado da semana de
+                          26.08.2026: PIX zerado, R$ 57.923,24 no produto
+                          errado (docs 1300006362 e 1300006404), e nenhum
+                          check acusou. Desde então o teste vive em
+                          `e_marcador_pix()`, que compara só o primeiro
+                          campo antes do '|' e aceita as duas formas.
+                          Se o SAP mudar o separador de novo, é o único
+                          ponto a ajustar.
+
 R5b (Caixa que NÃO é     : VERIFICADA contra os extratos de 19.08.2026.
      FGTS -> Fornecedor)   Caixa nem sempre é FGTS. Quando a fatura TEM
                           "Texto de item" e ele não é o marcador "PIX", o
@@ -137,6 +152,7 @@ real da semana.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Callable
 
@@ -251,6 +267,87 @@ CAMPOS_PARTIDAS: dict[str, str] = {
 }
 
 TOKEN_PIX_TEXTO_ITEM = "PIX"
+
+
+def _regex_marcador(*variacoes: str) -> re.Pattern[str]:
+    """Monta um regex que casa qualquer uma das `variacoes` só quando aparece
+    como o COMEÇO do texto (ignorando espaço em branco na frente), seguida de
+    fim de string ou de um separador — nunca grudada em outra palavra.
+
+    Usado pros marcadores no "Texto de item": o SAP põe a categoria primeiro
+    e o resto (referência, abreviação) depois, com separador variável — visto
+    até agora pipe e traço, mas o próximo pode vir diferente. \\b garante que
+    "PIX" não casa dentro de "PIXEL", e frases com espaço ("FOLHA DE
+    PAGAMENTO") continuam pedindo a frase inteira, não só "FOLHA".
+    """
+    alternativas = "|".join(re.escape(v) for v in variacoes)
+    return re.compile(rf"^\s*(?:{alternativas})\b", re.IGNORECASE)
+
+
+# Casa "PIX" (qualquer caixa: PIX, Pix, pix) só quando é a PRIMEIRA palavra do
+# texto, seguida de fim de string ou de um separador (espaço, traço, pipe,
+# dois-pontos...). \b garante que não gruda em outra palavra — "PIXEL..." não
+# é marcador, mas "PIX-algo", "PIX | algo", "PIX algo", "PIX" sozinho, todos são.
+_RE_MARCADOR_PIX = _regex_marcador("PIX")
+
+
+def e_marcador_pix(texto: object) -> bool:
+    """True quando o "Texto de item" marca o pagamento como PIX.
+
+    O marcador é sempre a PRIMEIRA palavra do texto — o que vem depois pode
+    ser qualquer separador, abreviação ou referência. Formas já vistas no
+    export, todas casam:
+
+        "PIX"                        -> até 19.08.2026
+        "PIX | GDF_20025 - 08_2026"  -> a partir de 26.08.2026, com pipe
+        "PIX - GDF_20025 - 08_2026"  -> variante com traço
+        "Pix", "pix", "PIX15..."     -> caixa e sufixo colado também casam
+
+    Até 26.08.2026 a comparação era `texto.strip().upper() == "PIX"`,
+    igualdade exata. Quando o SAP passou a anexar a referência da guia no
+    mesmo campo, a R3 parou de disparar e — pior — a R5b passou a mandar
+    esses documentos pra Pagamento Fornecedores, porque o teste dela é o
+    mesmo critério invertido. Efeito na semana de 26.08.2026: PIX zerado e
+    R$ 57.923,24 no produto errado, sem nenhum check acusar (docs
+    1300006362 e 1300006404, CAIXA ECONOMICA FEDERAL). Confirmado contra o
+    portal do banco: PAGAR PIX, 4 itens pendentes, R$ 57.923,24.
+
+    Regex de fronteira de palavra, e não `"PIX" in texto` nem split fixo por
+    um separador: uma referência de fatura que mencione PIX no meio do texto
+    não é marcador, e o separador entre a palavra e o resto pode variar
+    (visto pipe e traço até agora — pode aparecer outro no futuro).
+    """
+    return bool(_RE_MARCADOR_PIX.match(str(texto or "")))
+
+
+# Variações de "Folha de Pagamento" já mencionadas como possíveis no Texto de
+# item — maiúscula/minúscula não importa (regex é IGNORECASE), então listar
+# só as formas de ESCRITA distintas: extenso e abreviado "Pgto".
+# AINDA NÃO CONFIRMADO contra nenhum documento real do export (diferente da
+# R5/PIX, que tem os docs 1300006362/1300006404 como prova). Por isso
+# `e_marcador_folha()` não está ligada em `classificar()` — só no check de
+# validação (`_checks` em gerar_base.py), como alerta pra comparar contra o
+# que a R4 (fornecedor ICBRWA) já classifica. Promover a marcador de
+# classificação de verdade só depois de ver o texto exato de um doc real.
+VARIACOES_FOLHA_TEXTO_ITEM: tuple[str, ...] = (
+    "FOLHA DE PAGAMENTO",
+    "FOLHA DE PGTO",
+    "FOLHA PGTO",
+    "FOLHA",
+)
+_RE_MARCADOR_FOLHA = _regex_marcador(*VARIACOES_FOLHA_TEXTO_ITEM)
+
+
+def e_marcador_folha(texto: object) -> bool:
+    """True quando o "Texto de item" marca o pagamento como Folha de
+    Pagamento — mesma lógica de fronteira de palavra do `e_marcador_pix()`,
+    aceitando "Folha de Pagamento", "Folha de Pgto", "Folha Pgto" ou só
+    "Folha", em qualquer caixa, seguido de qualquer separador.
+
+    Ver aviso em `VARIACOES_FOLHA_TEXTO_ITEM`: ainda não confirmado contra um
+    documento real — hoje só usado pra alertar, não pra classificar.
+    """
+    return bool(_RE_MARCADOR_FOLHA.match(str(texto or "")))
 
 
 def _e_linha_de_pagamento(linha: pd.Series) -> bool:
@@ -430,7 +527,7 @@ def classificar(
             continue
 
         texto = textos_item.get(documento, "")
-        if texto.strip().upper() == TOKEN_PIX_TEXTO_ITEM and not _r4_icbrwa(linha):
+        if e_marcador_pix(texto) and not _r4_icbrwa(linha):
             produto.loc[i] = PIX
             regra.loc[i] = f"R3 — Texto de item = PIX ({documento})"
             continue
@@ -451,7 +548,7 @@ def classificar(
         # FGTS (ex.: depósito de reclamatória trabalhista "RT ..."), e sai
         # pelo convênio de fornecedores. Só vale quando existe texto: sem
         # texto não dá pra afirmar nada, então cai no padrão R5 (PIX).
-        if _r5_caixa(linha) and texto.strip() and texto.strip().upper() != TOKEN_PIX_TEXTO_ITEM:
+        if _r5_caixa(linha) and texto.strip() and not e_marcador_pix(texto):
             produto.loc[i] = FORNECEDORES
             regra.loc[i] = f"R5b — Caixa sem marcador PIX no texto de item ({documento})"
             continue
