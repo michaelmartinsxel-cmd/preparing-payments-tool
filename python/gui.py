@@ -55,6 +55,7 @@ def resource_path(*parts: str) -> Path:
 
 
 LOGO_PATH = resource_path("assets", "nordex-logo.png")
+ICON_PATH = resource_path("assets", "app-icon.png")
 
 # ---------------------------------------------------------------------------
 # Paleta — tokens do spec "Nordex Comparador v2" (tema claro fintech)
@@ -427,6 +428,9 @@ class App(tk.Tk):
         self.geometry("1120x920")
         self.minsize(860, 680)
         self.configure(bg=BG)
+        if ICON_PATH.exists():
+            self._icon_img = tk.PhotoImage(file=str(ICON_PATH))
+            self.iconphoto(True, self._icon_img)
 
         self.output_dir: Path | None = None
         self.is_running = False
