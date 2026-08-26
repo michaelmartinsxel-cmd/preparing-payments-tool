@@ -1,3 +1,4 @@
+
 # Nordex Comparador
 
 App desktop com interface gráfica para `python/gerar_base.py`: você seleciona
@@ -53,15 +54,31 @@ terminal, nada de Python instalado na máquina que for rodar. Só precisa gerar
 de novo se o código mudar; o `.exe` em si pode ser copiado pra qualquer PC
 Windows.
 
-`build_exe.bat` procura sozinho uma instalação WinPython (`WPy64-*`) na área
-de trabalho/pasta do usuário e usa o `python.exe`/`pip` de dentro dela — não
-precisa abrir o "WinPython Command Prompt" na mão antes. Se não achar
-nenhuma e `python` também não estiver no PATH, ele avisa e para (nesse caso
-aí sim: abra o WinPython Command Prompt, `cd /d` até esta pasta, e rode
-`build_exe.bat` de lá).
+`build_exe.bat` tenta achar o Python sozinho, nesta ordem, e não precisa
+abrir o "WinPython Command Prompt" na mão antes:
+
+1. Caminho passado na linha de comando (`build_exe.bat "C:\...\python.exe"`).
+2. Alguns caminhos conhecidos na Área de Trabalho/perfil do usuário
+   (resolvendo redirecionamento pro OneDrive quando existir), testando tanto
+   `<pasta>\python.exe` quanto `<pasta>\python\python.exe` — o WinPython
+   costuma usar a segunda forma (subpasta `python\` aninhada), mas instalações
+   portáteis mais simples às vezes têm o `.exe` direto na raiz.
+3. Varredura de pastas `WPy*` / `Python*` / `WinPython*` na Área de Trabalho e
+   no perfil, nos mesmos dois formatos acima.
+4. `python`/`python3` do PATH do sistema, como último recurso.
+
+Se nada disso encontrar um interpretador, ele avisa e para, mostrando o
+comando exato pra rodar passando o caminho manualmente.
 
 O `.exe` costuma sair grande (150–250 MB) porque leva o Python inteiro +
 pandas/numpy dentro — normal para esse tipo de empacotamento, não é bug.
+
+**Importante:** rode `build_exe.bat` sempre de dentro da pasta `python/`
+(onde estão `gui.py`, `requirements.txt`, `assets/`) — nunca de dentro da
+pasta raiz da instalação do Python. Ele usa `requirements.txt` e `assets/`
+relativos à própria localização do script; rodando do lugar errado, o
+PyInstaller não encontra esses arquivos e o build falha ou gera um `.exe`
+incompleto.
 
 ## Electron — pré-requisitos
 
@@ -132,6 +149,24 @@ Se algum dia o export vier incompleto, o relatório continua saindo com os
 valores certos (a linha bancária vem do outro arquivo), mas a aba Validações
 acusa ALERTA apontando quais documentos foram classificados só pelo código do
 fornecedor — é o sinal de que os filtros precisam ser revistos.
+
+## Tratamento de erro na interface
+
+Quando `gerar_base.py` falha por um motivo já conhecido (ex.: o arquivo
+selecionado não tem a aba "Exportação SAPUI5" — não é o export certo do
+SAP), o painel de erro da interface mostra só a mensagem clara, não o
+traceback inteiro do Python. O traceback completo continua indo pro console
+(que abre automaticamente quando dá erro), pra quem precisar depurar mais a
+fundo.
+
+## Referência circular no `.xlsx` gerado
+
+Se um produto (Folha de Pagamento, PIX, Pagamento Fornecedores ou TM5) ficar
+com **zero documentos** naquela rodada, a aba dele grava o total como `0`
+fixo, em vez de uma fórmula `SUM` sobre um intervalo vazio — um intervalo
+assim (ex.: `B5:B4`) o Excel normaliza incluindo a própria célula do total,
+o que dispara o aviso "Existe uma ou mais referências circulares" ao abrir o
+arquivo. Corrigido; abas com dados continuam usando fórmula normalmente.
 
 ## Observações sobre `config.py`
 
