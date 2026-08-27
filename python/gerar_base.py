@@ -163,10 +163,17 @@ def _banco(conta_razao: object) -> str:
 # o SAP identifica pelo "Texto de item" — ver _corrigir_valor_por_fatura().
 PRODUTOS_VALOR_POR_FATURA = (regras.PIX, regras.FOLHA)
 
+# Diferença abaixo da qual a soma das faturas NÃO substitui o valor da linha
+# bancária — ver `_corrigir_valor_por_fatura()`. Uma baixa que compensa outros
+# lançamentos do dia difere do montante de aprovação em milhares de reais; o
+# que aparece em centavos é arredondamento do SAP ao ratear a fatura, e aí o
+# número certo é o da linha bancária, que é o que o portal do banco exibe.
+TOLERANCIA_VALOR_FATURA: float = 1.00
+
 
 def _corrigir_valor_por_fatura(base: pd.DataFrame, valores_fatura: dict[str, float]) -> pd.DataFrame:
     """Troca o Valor de PIX e Folha de Pagamento pela soma das faturas
-    daquele documento.
+    daquele documento, quando as duas fontes divergem de verdade.
 
     Pro resto dos produtos (TM5, Pagamento Fornecedores) o valor continua
     sendo o da linha bancária — lá o líquido da baixa É o pagamento.
@@ -174,6 +181,14 @@ def _corrigir_valor_por_fatura(base: pd.DataFrame, valores_fatura: dict[str, flo
     Em PIX e Folha o líquido bancário pode sair diferente do montante que
     vai pra aprovação (a baixa compensa mais de um lançamento do dia),
     e o que precisa bater com o portal do banco é a soma das faturas.
+
+    Divergência de CENTAVOS é o caso oposto, e trocar o valor nela erra
+    contra o portal. Confirmado em 28.08.2026, doc 1300006492: as faturas
+    somam -3.037.254,11 (-372.968,27 + -2.664.285,84), a linha bancária
+    traz -3.037.254,12, e o convênio FOLHA DE PAGAMENTO do banco mostra
+    exatamente 3.037.254,12 — o centavo é arredondamento do SAP ao ratear
+    a fatura, não compensação. Por isso a troca só vale a partir de
+    `TOLERANCIA_VALOR_FATURA`; abaixo disso o valor bancário fica.
 
     O sinal da linha bancária é preservado (saída de caixa = negativo), já
     que "Montante (ME)" vem com a convenção do razão de fornecedor, que é
@@ -190,8 +205,15 @@ def _corrigir_valor_por_fatura(base: pd.DataFrame, valores_fatura: dict[str, flo
 
     soma = base["Documento"].map(valores_fatura)
     sinal = base["Valor"].map(lambda v: -1.0 if v < 0 else 1.0)
-    usar = base["Produto"].isin(PRODUTOS_VALOR_POR_FATURA) & soma.notna() & (soma != 0)
-    base.loc[usar, "Valor"] = (soma.abs() * sinal).round(2)[usar]
+    valor_fatura = (soma.abs() * sinal).round(2)
+    divergencia = (valor_fatura - base["Valor"]).abs()
+    usar = (
+        base["Produto"].isin(PRODUTOS_VALOR_POR_FATURA)
+        & soma.notna()
+        & (soma != 0)
+        & (divergencia >= TOLERANCIA_VALOR_FATURA)
+    )
+    base.loc[usar, "Valor"] = valor_fatura[usar]
     return base
 
 
