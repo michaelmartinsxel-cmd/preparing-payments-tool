@@ -13,7 +13,7 @@ from pathlib import Path
 # JANELA — editar toda semana
 # ============================================================
 
-DATA_REFERENCIA: date = date(2026, 8, 26)
+DATA_REFERENCIA: date = date(2026, 8, 28)
 
 ARQUIVO_BASE: str = "Payments 29.07.2026.xlsx"
 ABA_BASE: str = "SAP"

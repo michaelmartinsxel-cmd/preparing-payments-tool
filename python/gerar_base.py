@@ -46,10 +46,10 @@ import regras
 # Ver docstring de regras.classificar() pros casos já documentados.
 # ============================================================
 OVERRIDES_SEMANA: dict[str, str] = {
-    # Semana 26.08.2026: vazio de propósito. Os dois PIX da Caixa
-    # (1300006362 e 1300006404, R$ 57.923,24) são pegos automaticamente pela
-    # R3, depois que `regras.e_marcador_pix()` passou a aceitar o formato
-    # "PIX | GDF_20025 - 08_2026". Não precisam de exceção manual.
+    # Semana 28.08.2026: vazio de propósito. O doc 1300006491 (R$ 3.628,03,
+    # texto "FT80114_28_08_2026") é pego automaticamente pela R4b — ICBRWA
+    # cujo texto de item não menciona Folha sai por Pagamento Fornecedores.
+    # Não precisa de exceção manual.
     # Exemplo de exclusão de duplicidade (semana de 15.07.2026):
     # "1300005522": regras.EXCLUIDO,  # duplicava pagamento já em TM5
     # "1300005270": "Pagamento Fornecedores",  # ICBRWA sem PEN, não é Folha
@@ -461,13 +461,10 @@ def _checks(
             ))
 
         # Mesma pergunta pro marcador de Folha — mas SÓ como alerta, não
-        # BLOQUEIO. Diferente do PIX (docs 1300006362/1300006404 confirmados
-        # contra o portal do banco), ainda não vi nenhum documento real com
-        # "Folha de Pagamento"/"Folha de Pgto" no Texto de item — hoje a R4
-        # classifica Folha só pelo fornecedor ICBRWA. Se aparecer aqui, é
-        # sinal de que o SAP começou a marcar Folha do mesmo jeito que PIX,
-        # e a regra pode precisar de uma R3-Folha real — mas até ter um caso
-        # confirmado, é só sinalização pra conferência manual.
+        # BLOQUEIO. Documento com "Folha ..." no começo do Texto de item que
+        # não virou produto Folha é sempre suspeito, mas nem sempre erro: a
+        # R2 (referência PEN) manda pra Fornecedores um texto que começa com
+        # "Folha de Pagto - Pensão", e isso está certo — pensão sai por TED.
         docs_folha_export = {
             str(doc) for doc, textos in textos_item.items()
             if regras.e_marcador_folha(textos)
@@ -480,6 +477,29 @@ def _checks(
                 f"{len(divergentes)} documento(s) com 'Folha' no texto de item, mas "
                 f"classificado(s) como outro produto — conferir se é caso novo, ainda não "
                 f"virou regra automática: {', '.join(divergentes[:5])}",
+            ))
+
+    # A R4b tira de Folha o lançamento ICBRWA cujo "Texto de item" não menciona
+    # Folha. É o único ponto do fluxo em que um documento sai do padrão R4 por
+    # AUSÊNCIA de marcador, então lista o que ela moveu: se o SAP passar a
+    # escrever Folha com outra palavra (só "Salário", "Adiantamento"), o
+    # documento aparece aqui antes de virar erro de convênio no banco.
+    if "RegraAplicada" in base.columns:
+        movidos = base[base["RegraAplicada"].astype(str).str.startswith("R4b —")]
+        if movidos.empty:
+            checks.append((
+                "ICBRWA reclassificado por texto de item", "OK",
+                "nenhum ICBRWA saiu de Folha por falta de marcador no texto",
+            ))
+        else:
+            detalhe = "; ".join(
+                f"{r.Documento} {r.Valor:,.2f}"
+                for r in movidos.head(5).itertuples(index=False)
+            )
+            checks.append((
+                "ICBRWA reclassificado por texto de item", "ALERTA",
+                f"{len(movidos)} doc(s) ICBRWA em Pagamento Fornecedores porque o texto "
+                f"de item não menciona Folha — conferir contra o convênio do banco: {detalhe}",
             ))
 
     # Onde a soma das faturas mudou o valor de um PIX/Folha em relação ao

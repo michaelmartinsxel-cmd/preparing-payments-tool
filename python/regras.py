@@ -86,30 +86,53 @@ R3 vs R4 (ICBRWA)       : VERIFICADA contra a base aprovada de 12.08.2026.
                           1300006094, TRIBUNAL REGIONAL TRABALHO 5A REGIÃO,
                           -548,26 -> PIX).
 
-R2b (ICBRWA rescisão)   : VERIFICADA contra os extratos do Santander de
-                          19.08.2026. Nem todo ICBRWA é Folha: rescisão e
-                          pensão saem por TED "outra titularidade", dentro
-                          do convênio PAGTO FORNECEDORES, não do convênio
-                          FOLHA DE PAGAMENTO. Prova: a linha "INCLUIR TED
-                          CIP OUTRA TITULARIDADE" do banco (R$4.312,09 em 2
-                          lançamentos) é exatamente doc 1300006175
-                          ("Rescisão Compl - 08/2026", -2.604,08) + doc
-                          1300006176 ("Folha de Pagto - Pensão", -1.708,01);
-                          e o convênio de Folha (R$152.133,20) é exatamente
-                          os outros três: 1300006133 (-93.551,92),
-                          1300006134 (-31.872,42) e 1300006177 (-26.708,86).
-                          Pensão já caía certo pela R2 (referência PEN);
-                          rescisão não tinha marcador e caía em Folha.
-                          Por isso R2b manda "Texto de item" com "RESCIS"
-                          (ICBRWA) para Pagamento Fornecedores.
+R4b (ICBRWA sem marcador : VERIFICADA contra o portal do banco em
+     de Folha -> Fornec.)   28.08.2026. Nem todo ICBRWA é Folha: só é Folha
+                          o que o "Texto de item" da fatura diz ser. Prova:
+                          doc 1300006491 (-3.628,03, texto
+                          "FT80114_28_08_2026") vinha caindo em Folha pelo
+                          padrão R4, mas o convênio FOLHA DE PAGAMENTO do
+                          banco fechou em R$3.037.254,12 (só o doc
+                          1300006492, cujas faturas trazem "Folha de
+                          Pagamento | ADIPAR28082026" e "Folha de Pagamento
+                          08/2026"), e o convênio PAGTO FORNECEDORES em
+                          R$49.311,60 (5.038,74 em C/C + 44.272,86 em TED
+                          CIP) = 45.683,57 (pensão) + 3.628,03. Ou seja: o
+                          3.628,03 é do convênio de fornecedores.
 
-                          Desenho proposital — lista de EXCLUSÃO, não de
-                          inclusão: só tira de Folha o que é comprovadamente
-                          rescisão/pensão. Um whitelist ("só é Folha se o
-                          texto disser salário/folha/adiantamento") quebraria
-                          o doc 1300006133, que não tem linha de fatura no
-                          export e portanto não tem "Texto de item" nenhum —
-                          ele depende de continuar caindo no padrão R4.
+                          Substituiu a antiga R2b, que tirava de Folha só o
+                          "RESCIS" — lista de exclusão que já não bastava:
+                          rescisão era um caso particular de "texto que não
+                          diz Folha". Como a R2b exigia que o texto NÃO
+                          mencionasse "FOLHA" pra reclassificar, a R4b é um
+                          superset exato dela (doc 1300006175, "Rescisão
+                          Compl - 08/2026", continua em Fornecedores).
+
+                          Três guardas, cada uma cobrindo um caso real:
+
+                          - só quando EXISTE "Texto de item". Sem texto não
+                            dá pra afirmar que não é Folha, então mantém o
+                            padrão R4. É o que preserva o doc 1300006133
+                            (-93.551,92, 19.08.2026), cuja fatura 5015173
+                            não sai no export — errar ele custaria R$93 mil.
+                          - texto que MENCIONA "Folha" em qualquer posição
+                            continua Folha (não só no começo, como pede
+                            `e_marcador_folha`): "Folha de Pagto - Pensão"
+                            é folha ainda que a pensão saia por TED, e nesse
+                            caso quem decide é a R2 (referência PEN), que
+                            roda antes.
+                          - texto com marcador PIX continua Folha: pra
+                            ICBRWA, "PIX" significa folha paga via PIX por
+                            sigilo, não produto PIX (ver R3 vs R4 abaixo) —
+                            é o que preserva os docs 1300006091/1300006092
+                            de 12.08.2026.
+
+                          Todo documento reclassificado por ela aparece no
+                          check "ICBRWA reclassificado por texto de item" da
+                          aba Validações, pra conferência semanal: se o SAP
+                          passar a escrever Folha com outra palavra (só
+                          "Salário", "Adiantamento" etc.), é ali que isso
+                          aparece antes de virar erro de convênio.
 
 NAO AUTOMATIZAR         : na planilha aprovada de 12.08.2026 o doc
                           1300006091 (-115.516,12) aparece dividido em duas
@@ -211,9 +234,8 @@ PREFIXO_SA = "SA"
 FORNECEDOR_ICBRWA = "ICBRWA"
 FORNECEDOR_CAIXA = "102087"
 TOKEN_PEN = "PEN"
-# Prefixo sem acento de propósito: pega "Rescisão", "Rescisao", "Rescisões".
-TOKEN_RESCISAO = "RESCIS"
-# Se o texto já diz "Folha", a rescisão É paga pelo convênio de Folha (ver R2b).
+# Basta o texto MENCIONAR "Folha" (em qualquer posição) pra o lançamento ICBRWA
+# continuar em Folha de Pagamento — ver as guardas da R4b.
 TOKEN_FOLHA = "FOLHA"
 
 
@@ -350,12 +372,13 @@ def e_marcador_pix(texto: object) -> bool:
 # Variações de "Folha de Pagamento" já mencionadas como possíveis no Texto de
 # item — maiúscula/minúscula não importa (regex é IGNORECASE), então listar
 # só as formas de ESCRITA distintas: extenso e abreviado "Pgto".
-# AINDA NÃO CONFIRMADO contra nenhum documento real do export (diferente da
-# R5/PIX, que tem os docs 1300006362/1300006404 como prova). Por isso
-# `e_marcador_folha()` não está ligada em `classificar()` — só no check de
-# validação (`_checks` em gerar_base.py), como alerta pra comparar contra o
-# que a R4 (fornecedor ICBRWA) já classifica. Promover a marcador de
-# classificação de verdade só depois de ver o texto exato de um doc real.
+# CONFIRMADO em 28.08.2026: as duas faturas do doc 1300006492 vieram com
+# "Folha de Pagamento | ADIPAR28082026" e "Folha de Pagamento 08/2026", e o
+# convênio de Folha do banco fechou exato nesse documento.
+# `e_marcador_folha()` (marcador no COMEÇO do texto) continua servindo só ao
+# check da aba Validações; quem classifica é a R4b, que usa o critério mais
+# largo TOKEN_FOLHA (menção em qualquer posição) de propósito — na dúvida
+# o lançamento ICBRWA fica em Folha, que é o padrão da R4.
 VARIACOES_FOLHA_TEXTO_ITEM: tuple[str, ...] = (
     "FOLHA DE PAGAMENTO",
     "FOLHA DE PGTO",
@@ -604,9 +627,18 @@ def classificar(
             regra.loc[i] = f"R2 — ICBRWA com referência PEN ({ref})"
             continue
 
-        if _r4_icbrwa(linha) and TOKEN_RESCISAO in texto.upper() and TOKEN_FOLHA not in texto.upper():
+        # R4b — ICBRWA só é Folha quando o "Texto de item" da fatura diz que
+        # é. Com texto que não menciona Folha (e não é o marcador PIX, que
+        # pra ICBRWA significa folha paga por PIX), o pagamento sai pelo
+        # convênio de fornecedores. Sem texto nenhum, cai no padrão R4.
+        if (
+            _r4_icbrwa(linha)
+            and texto.strip()
+            and TOKEN_FOLHA not in texto.upper()
+            and not e_marcador_pix(texto)
+        ):
             produto.loc[i] = FORNECEDORES
-            regra.loc[i] = f"R2b — ICBRWA rescisão, pago por TED ({documento})"
+            regra.loc[i] = f"R4b — ICBRWA sem marcador de Folha no texto de item ({documento})"
             continue
 
         # R5b — Caixa Econômica NEM SEMPRE é FGTS/PIX. Quando a fatura traz
