@@ -271,6 +271,12 @@ def classificar_semana(df_banco: pd.DataFrame, df_partidas: pd.DataFrame) -> tup
 FMT = "#,##0.00;-#,##0.00;-"
 PCT = "0.0%"
 FONTE = "Aptos"
+TAMANHO_PADRAO = 9
+
+# Ordem canônica dos produtos no relatório. Um produto só aparece — linha na
+# tabela do Resumo e aba própria visível — quando tem pagamento na semana;
+# ver `_produtos_com_valor()`.
+PRODUTOS: tuple[str, ...] = ("Folha de Pagamento", "PIX", "Pagamento Fornecedores", "TM5")
 CENTRO = Alignment(horizontal="center", vertical="center")
 H_FILL = PatternFill("solid", fgColor="1F3864")
 H_FONT = Font(name=FONTE, size=9, bold=True, color="FFFFFF")
@@ -300,6 +306,51 @@ SANTANDER_FILL = PatternFill("solid", fgColor="EC0000")
 SANTANDER_FONT = Font(name=FONTE, size=9, bold=True, color="FFFFFF")
 BB_FILL = PatternFill("solid", fgColor="FFCC00")
 BB_FONT = Font(name=FONTE, size=9, bold=True, color="003087")
+
+
+def _produtos_com_valor(base: pd.DataFrame) -> tuple[str, ...]:
+    """Produtos que de fato têm pagamento na semana, na ordem canônica.
+
+    Semana sem PIX (ou sem TM5) não deve mostrar o produto zerado: a linha
+    "PIX | 0 | -" na tabela do Resumo e a aba vazia correspondente só poluem
+    o relatório que vai pro e-mail de aprovação. Fica de fora o produto sem
+    documento nenhum e também o que soma exatamente zero (par de estorno que
+    se anula) — nos dois casos não há o que aprovar.
+
+    Se NENHUM produto tiver valor (base vazia), devolve a ordem canônica
+    inteira: melhor um relatório zerado e legível do que uma aba de Resumo
+    sem tabela nenhuma e um arquivo só com abas ocultas.
+    """
+    if base.empty:
+        return PRODUTOS
+    agrupado = base.groupby("Produto")["Valor"].agg(["count", "sum"])
+    presentes = tuple(
+        p
+        for p in PRODUTOS
+        if p in agrupado.index
+        and agrupado.loc[p, "count"] > 0
+        and round(float(agrupado.loc[p, "sum"]), 2) != 0
+    )
+    return presentes or PRODUTOS
+
+
+def _aplicar_fonte_padrao(wb: Workbook) -> None:
+    """Fixa Aptos 9 como fonte padrão do arquivo inteiro, não só das células
+    que o relatório escreve.
+
+    Sem isso a célula vazia (e qualquer coisa digitada nela depois) sai na
+    fonte padrão do openpyxl, Calibri 11: bastava clicar numa célula fora da
+    tabela pra ver a caixa de fonte mudar de Aptos 9 pra Calibri 11, e um
+    ajuste manual feito depois na planilha saía com a letra errada.
+
+    Mexe nos dois pontos que o Excel consulta: o estilo nomeado "Normal"
+    (o que a interface chama de fonte padrão da pasta de trabalho) e a fonte
+    de índice 0 da tabela de estilos, que é a herdada por toda célula sem
+    formatação explícita.
+    """
+    padrao = Font(name=FONTE, size=TAMANHO_PADRAO)
+    wb._fonts[0] = padrao
+    wb._named_styles["Normal"].font = padrao
 
 
 def _cabecalho(ws, row, cols, widths, col_inicio=1):
@@ -408,9 +459,8 @@ def _checks(
     else:
         checks.append(("Sem lançamentos zerados", "ALERTA", f"{len(zero)} lançamento(s) com valor 0"))
 
-    produtos_validos = {"Folha de Pagamento", "PIX", "Pagamento Fornecedores", "TM5"}
     nulos = base["Produto"].isna().sum()
-    invalidos = sorted(set(base["Produto"].dropna()) - produtos_validos)
+    invalidos = sorted(set(base["Produto"].dropna()) - set(PRODUTOS))
     if nulos or invalidos:
         checks.append(("Produto válido em todas as linhas", "BLOQUEIO", f"{nulos} sem produto; fora da lista: {invalidos}"))
     else:
@@ -587,7 +637,13 @@ def _aba_base(wb: Workbook, base: pd.DataFrame) -> int:
     return last
 
 
-def _aba_resumo(wb: Workbook, janela: "config.Janela", base: pd.DataFrame, last: int) -> None:
+def _aba_resumo(
+    wb: Workbook,
+    janela: "config.Janela",
+    base: pd.DataFrame,
+    last: int,
+    produtos: tuple[str, ...],
+) -> None:
     ws = wb.create_sheet("Resumo", 0)
     ws.sheet_view.showGridLines = False
     ws["A1"] = "Relatório de Aprovação de Pagamentos"
@@ -602,7 +658,10 @@ def _aba_resumo(wb: Workbook, janela: "config.Janela", base: pd.DataFrame, last:
         ("Banco", ", ".join(bancos)),
         ("Conta G/L", ", ".join(sorted(base["G/L Account"].dropna().astype(str).unique()))),
         ("Status dos lançamentos", "Pendentes"),
-        ("Produtos", "Folha de Pagamento, PIX, Pagamento Fornecedores, TM5"),
+        # Só os produtos que aparecem na tabela abaixo — listar os quatro
+        # fixos contradiria a tabela e as abas quando a semana não tem PIX
+        # ou TM5 (esses ficam de fora da tabela e com a aba oculta).
+        ("Produtos", ", ".join(produtos)),
         ("Documentos", len(base)),
         ("Fonte", "SAP: Administrar itens de fornecedor + Partidas individuais no Razão"),
     ]
@@ -618,7 +677,6 @@ def _aba_resumo(wb: Workbook, janela: "config.Janela", base: pd.DataFrame, last:
     r += 1
     _cabecalho(ws, r, ["Produto", "Qtd. documentos", "Valor (BRL)", "% do total"], [30, 18, 18, 12])
 
-    produtos = ("Folha de Pagamento", "PIX", "Pagamento Fornecedores", "TM5")
     first = r + 1
     total_row = first + len(produtos)
     for i, p in enumerate(produtos):
@@ -662,7 +720,19 @@ def _aba_resumo(wb: Workbook, janela: "config.Janela", base: pd.DataFrame, last:
     )
 
 
-def _aba_produto(wb: Workbook, produto: str, base: pd.DataFrame, janela: "config.Janela", last: int) -> None:
+def _aba_produto(
+    wb: Workbook,
+    produto: str,
+    base: pd.DataFrame,
+    janela: "config.Janela",
+    last: int,
+    visivel: bool = True,
+) -> None:
+    """Aba de um produto. `visivel=False` grava a aba normalmente mas deixa
+    ela oculta — é o caso do produto sem pagamento na semana (ver
+    `_produtos_com_valor()`). Oculta, e não removida, pelo mesmo motivo da
+    aba Validações: o arquivo continua completo pra auditoria (Ctrl+Shift+F11
+    reexibe), só não aparece de cara pra quem vai aprovar."""
     sub = (
         base[base["Produto"] == produto]
         .groupby("Vendor", as_index=False)
@@ -696,8 +766,17 @@ def _aba_produto(wb: Workbook, produto: str, base: pd.DataFrame, janela: "config
         ws.cell(row=rr, column=3).number_format = FMT
 
     tt = f0 + len(sub)
-    ws.cell(row=tt, column=2, value=f"=SUM(B{f0}:B{tt - 1})")
-    ws.cell(row=tt, column=3, value=f"=SUM(C{f0}:C{tt - 1})")
+    if len(sub):
+        ws.cell(row=tt, column=2, value=f"=SUM(B{f0}:B{tt - 1})")
+        ws.cell(row=tt, column=3, value=f"=SUM(C{f0}:C{tt - 1})")
+    else:
+        # Produto sem nenhuma linha: `=SUM(B4:B3)` é intervalo vazio, e o
+        # Excel normaliza isso incluindo a própria célula do total — é o que
+        # dispara "Existe uma ou mais referências circulares" ao abrir o
+        # arquivo (o aviso aparecia na barra de status mesmo com a aba
+        # oculta). Total fixo em 0 resolve, e o valor é o mesmo.
+        ws.cell(row=tt, column=2, value=0)
+        ws.cell(row=tt, column=3, value=0)
     _linha_total(ws, tt, 3, 1, "Total Geral")
     ws.cell(row=tt, column=2).alignment = Alignment(horizontal="center")
     ws.cell(row=tt, column=3).number_format = FMT
@@ -711,6 +790,8 @@ def _aba_produto(wb: Workbook, produto: str, base: pd.DataFrame, janela: "config
         ],
     )
     ws.freeze_panes = "A4"
+    if not visivel:
+        ws.sheet_state = "hidden"
 
 
 def _aba_validacoes(wb: Workbook, checks: list[tuple[str, str, str]], atencao: pd.DataFrame) -> None:
@@ -779,6 +860,10 @@ def _centralizar_tudo(wb: Workbook) -> None:
     rodar por último aqui garante que nenhuma escrita posterior perca o
     centro por esquecimento pontual em algum ponto do código acima."""
     for ws in wb.worksheets:
+        # Grade desligada aqui também, e não só na criação de cada aba: passe
+        # único no final garante que nenhuma aba nova apareça com as linhas de
+        # grade por esquecimento pontual lá em cima.
+        ws.sheet_view.showGridLines = False
         for linha in ws.iter_rows():
             for celula in linha:
                 celula.alignment = CENTRO
@@ -797,11 +882,13 @@ def escrever_relatorio(
     `textos_item` é o mapa documento -> "Texto de item" vindo de
     `regras.textos_item_por_documento()`. Opcional: sem ele o log de
     validação sai igual ao de antes, só sem o check de PIX perdido."""
+    produtos = _produtos_com_valor(base)
     wb = Workbook()
+    _aplicar_fonte_padrao(wb)
     last = _aba_base(wb, base)
-    _aba_resumo(wb, janela, base, last)
-    for produto in ("Folha de Pagamento", "PIX", "Pagamento Fornecedores", "TM5"):
-        _aba_produto(wb, produto, base, janela, last)
+    _aba_resumo(wb, janela, base, last, produtos)
+    for produto in PRODUTOS:
+        _aba_produto(wb, produto, base, janela, last, visivel=produto in produtos)
 
     checks = _checks(base, janela, textos_item)
     atencao = (

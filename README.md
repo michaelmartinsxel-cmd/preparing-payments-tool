@@ -194,14 +194,42 @@ Detalhes do comportamento:
 - Isso **não** divide documento entre produtos — cada documento continua
   inteiro num produto só; só muda de onde sai o valor.
 
+## Produto sem pagamento na semana
+
+Produto (Folha de Pagamento, PIX, Pagamento Fornecedores ou TM5) que não tem
+documento nenhum — ou cuja soma dá exatamente zero, caso de par de estorno
+que se anula — **não aparece** no relatório:
+
+- fica de fora da tabela "Resumo por produto" (nada de linha `PIX | 0 | -`)
+  e da lista de "Produtos" no bloco de tópicos da aba Resumo;
+- a aba dele é gravada mas fica **oculta**, igual à aba `Validações` — o
+  arquivo continua completo pra auditoria (Ctrl+Shift+F11 reexibe), só não
+  aparece pra quem vai aprovar.
+
+Se NENHUM produto tiver valor (base vazia), o relatório volta a listar os
+quatro — melhor um relatório zerado e legível do que uma aba de Resumo sem
+tabela e um arquivo só com abas ocultas.
+
 ## Referência circular no `.xlsx` gerado
 
-Se um produto (Folha de Pagamento, PIX, Pagamento Fornecedores ou TM5) ficar
-com **zero documentos** naquela rodada, a aba dele grava o total como `0`
-fixo, em vez de uma fórmula `SUM` sobre um intervalo vazio — um intervalo
-assim (ex.: `B5:B4`) o Excel normaliza incluindo a própria célula do total,
-o que dispara o aviso "Existe uma ou mais referências circulares" ao abrir o
-arquivo. Corrigido; abas com dados continuam usando fórmula normalmente.
+Se um produto ficar com **zero documentos** naquela rodada, a aba dele grava
+o total como `0` fixo, em vez de uma fórmula `SUM` sobre um intervalo vazio —
+um intervalo assim (ex.: `B4:B3`) o Excel normaliza incluindo a própria
+célula do total, o que dispara o aviso "Existe uma ou mais referências
+circulares" na barra de status ao abrir o arquivo (aparecia mesmo com a aba
+oculta). Corrigido; abas com dados continuam usando fórmula normalmente.
+
+## Fonte e grade
+
+O arquivo inteiro sai em **Aptos 9** — inclusive a célula vazia e o que for
+digitado nela depois. Isso é fixado na fonte padrão da pasta de trabalho
+(estilo "Normal" + fonte de índice 0 da tabela de estilos), não só nas
+células que o relatório escreve; antes, clicar fora da tabela mostrava
+Calibri 11 na caixa de fonte e qualquer ajuste manual saía com a letra
+errada. Só o título da linha 1 de cada aba usa tamanho 10.
+
+As linhas de grade ficam desligadas em todas as abas, com um passe final em
+`_centralizar_tudo()` pra garantir que nenhuma aba nova escape disso.
 
 ## Observações sobre `config.py`
 
