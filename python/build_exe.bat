@@ -167,6 +167,36 @@ if errorlevel 1 goto :erro
 
 echo.
 echo ------------------------------------------------------------
+echo  Preparando pastas de build...
+echo ------------------------------------------------------------
+REM Fecha o programa caso esteja aberto, senao o PyInstaller nao
+REM consegue apagar o .exe antigo (Acesso negado / WinError 5).
+taskkill /f /im NordexComparador.exe >nul 2>&1
+
+set "TENTATIVAS=0"
+:apagar_exe
+if exist "dist\NordexComparador.exe" (
+    attrib -r "dist\NordexComparador.exe" >nul 2>&1
+    del /f /q "dist\NordexComparador.exe" >nul 2>&1
+    if exist "dist\NordexComparador.exe" (
+        set /a TENTATIVAS+=1
+        if !TENTATIVAS! GEQ 5 (
+            echo.
+            echo [erro] Nao consegui apagar "dist\NordexComparador.exe".
+            echo Feche o programa NordexComparador ^(se estiver aberto^), feche
+            echo qualquer janela do Explorer aberta nessa pasta, verifique se o
+            echo antivirus nao esta bloqueando o arquivo e rode o build de novo.
+            echo.
+            pause
+            exit /b 1
+        )
+        timeout /t 1 /nobreak >nul
+        goto :apagar_exe
+    )
+)
+
+echo.
+echo ------------------------------------------------------------
 echo  Gerando o executavel... ^(demora alguns minutos^)
 echo ------------------------------------------------------------
 "%PYTHON%" -m PyInstaller --noconfirm --onefile --windowed ^
