@@ -194,6 +194,32 @@ Detalhes do comportamento:
 - Isso **não** divide documento entre produtos — cada documento continua
   inteiro num produto só; só muda de onde sai o valor.
 
+## Remessa cancelada e refeita no mesmo dia (estorno)
+
+Quando a remessa é gerada, estornada e refeita no mesmo dia, o export traz as
+três coisas: os pagamentos cancelados (negativos), os estornos deles
+(positivos, que zeram os pares) e a remessa válida (negativos, ainda em
+aberto). A regra antiga (`R0b`) tirava só a ponta positiva e mantinha o
+pagamento cancelado — resultado em 02.09.2026: TM5 saiu R$ 9.994.966,07 em vez
+de R$ 5.426.042,43, R$ 4.568.923,64 a mais, porque a remessa cancelada foi
+somada à válida.
+
+A `R0c` tira o par inteiro, usando o critério do próprio SAP em vez de
+heurística de valor/fornecedor: linha com `Lançto.compensação` preenchido
+(item já compensado, logo não é mais item em aberto) cujo grupo de compensação
+soma exatamente zero. Pagamento em aberto — o que de fato está pendente de
+aprovação no banco — vem sem `Lançto.compensação` e nunca é tocado; grupo
+compensado que não zera (baixa conciliada contra extrato, por exemplo) também
+fica de fora da exclusão.
+
+O que foi excluído aparece na aba `Validações`, no check **"Estorno de remessa
+cancelada"** (quantidade e total estornado), pra que a remessa cancelada não
+suma em silêncio.
+
+Conferência de 02.09.2026: TM5 R$ 5.426.042,43 em 218 documentos = os dois
+arquivos transmitidos no SAP (`...TED2` R$ 5.397.722,23 com 212 pedidos +
+`...BOLETO` R$ 28.320,20 com 6 pedidos).
+
 ## Produto sem pagamento na semana
 
 Produto (Folha de Pagamento, PIX, Pagamento Fornecedores ou TM5) que não tem

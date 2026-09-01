@@ -409,6 +409,7 @@ def _checks(
     base: pd.DataFrame,
     janela: "config.Janela",
     textos_item: dict | None = None,
+    estornos: pd.DataFrame | None = None,
 ) -> list[tuple[str, str, str]]:
     """(check, severidade, detalhe) — espelha validacoes.py, adaptado pra
     ler direto do `limpo` (Company Code/Documento/Data etc. em vez do
@@ -595,6 +596,26 @@ def _checks(
                 "Valor de Folha/PIX pela soma das faturas", "ALERTA",
                 f"{len(ajustados)} documento(s) com valor ajustado pela soma das "
                 f"faturas do export: {detalhe}",
+            ))
+
+    # Remessa cancelada e refeita no mesmo dia (R0c): o par estorno +
+    # pagamento cancelado fica fora do relatório, mas precisa aparecer no log —
+    # é valor alto saindo da conta, e sumir em silêncio é justamente o que
+    # deixou o TM5 de 02.09.2026 com R$ 4.568.923,64 a mais.
+    if estornos is not None:
+        if estornos.empty:
+            checks.append((
+                "Estorno de remessa cancelada", "OK",
+                "nenhum pagamento estornado e recolocado neste export",
+            ))
+        else:
+            valor_col = regras.CAMPOS_BRUTOS["valor"]
+            cancelados = estornos[estornos[valor_col] < 0]
+            checks.append((
+                "Estorno de remessa cancelada", "ALERTA",
+                f"{len(cancelados)} pagamento(s) estornado(s) e fora do relatório, "
+                f"total {cancelados[valor_col].sum():,.2f} — refeitos em remessa nova; "
+                "conferir se o banco recebeu só a remessa válida",
             ))
 
     erros_zp = regras.conferir_zp(base, "Tipo Lançamento", "Produto")
@@ -874,6 +895,7 @@ def escrever_relatorio(
     janela: "config.Janela",
     destino: Path,
     textos_item: dict | None = None,
+    estornos: pd.DataFrame | None = None,
 ) -> Path:
     """Layout de referência: Base + Resumo (fórmulas) + uma aba por
     produto (fórmulas) + Validações. Fonte Arial 9, sem grade em todas
@@ -890,7 +912,7 @@ def escrever_relatorio(
     for produto in PRODUTOS:
         _aba_produto(wb, produto, base, janela, last, visivel=produto in produtos)
 
-    checks = _checks(base, janela, textos_item)
+    checks = _checks(base, janela, textos_item, estornos)
     atencao = (
         base[base["Valor"].abs() >= config.LIMITE_ATENCAO]
         .sort_values("Valor")
@@ -1129,6 +1151,7 @@ def main(argv: list[str] | None = None) -> int:
     caminho = escrever_relatorio(
         base, janela, destino,
         textos_item=regras.textos_item_por_documento(df_partidas),
+        estornos=regras.estornos_compensados(df_banco),
     )
     print(f"\nArquivo: {caminho}")
     return 0
