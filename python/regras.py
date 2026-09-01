@@ -8,6 +8,12 @@ STATUS DE ANCORAGEM
 --------------------
 R0 (SA -> excluído)     : verificada. Documento de conta-Razão (imposto de
                           importação), fora do escopo de pagamento.
+R0c (estorno compensado : VERIFICADA contra os arquivos transmitidos em
+     -> excluído)          02.09.2026. Remessa cancelada e refeita no mesmo
+                          dia: o par estorno + pagamento cancelado sai
+                          inteiro do relatório, não só a ponta positiva
+                          (que é o que a R0b faz). Ver
+                          `_marcar_estornos_compensados()`.
 R1 (ZP -> TM5)          : VERIFICADA contra a base de 29.07.2026
                           (248/248, sem falso positivo).
 R6 (flag manual -> PIX) : não é regra dedutível — é exceção operacional.
@@ -223,6 +229,7 @@ CAMPOS_BRUTOS: dict[str, str] = {
     "conta_razao": "Conta do Razão",
     "valor": "Mont.moeda empresa",
     "data": "Data de lançamento",
+    "compensacao": "Lançto.compensação",
 }
 
 # Contas de banco válidas. Filtrar por elas ANTES de classificar —
@@ -537,6 +544,54 @@ def _marcar_reversoes(base: pd.DataFrame) -> pd.Series:
     return excluir
 
 
+def _marcar_estornos_compensados(base: pd.DataFrame) -> pd.Series:
+    """Marca as duas pontas de um pagamento que foi ESTORNADO e recolocado
+    numa remessa nova — o estorno e o pagamento cancelado que ele compensa.
+
+    A R0b (`_marcar_reversoes`) tira só o lançamento positivo e mantém o
+    negativo, partindo do princípio de que o negativo é o pagamento real.
+    Isso vale quando o positivo é uma reversão avulsa, mas não quando a
+    remessa inteira foi cancelada e refeita: aí o negativo antigo TAMBÉM
+    não vai pro banco, e mantê-lo conta o pagamento duas vezes.
+
+    Confirmado em 02.09.2026: a remessa de docs 2000013728–2000013902 (175
+    pagamentos, -R$ 4.568.923,64) foi estornada pelos docs 2000013903–
+    2000014077 e refeita nos docs 2000014078–2000014295. Só a segunda foi
+    transmitida (arquivos ...TED2 R$ 5.397.722,23 + ...BOLETO R$ 28.320,20 =
+    R$ 5.426.042,43, 218 pedidos). Com a R0b sozinha o TM5 saiu
+    R$ 9.994.966,07 — a remessa cancelada somada à válida.
+
+    O critério é o do próprio SAP, não heurística de valor/fornecedor: a
+    linha traz `Lançto.compensação` preenchido (item já compensado, ou seja,
+    não é mais item em aberto) e o grupo daquele documento de compensação
+    soma exatamente zero — assinatura de par estorno/original. Pagamento em
+    aberto (o que de fato está pendente de aprovação no banco) vem sem
+    `Lançto.compensação`, e grupo compensado que não zera (ex.: baixa
+    conciliada contra extrato, cuja contrapartida nem sai no export) fica de
+    fora da exclusão de propósito.
+    """
+    col = CAMPOS_BRUTOS["compensacao"]
+    excluir = pd.Series(False, index=base.index)
+    if col not in base.columns:
+        return excluir
+
+    chave = base[col].map(doc_str)
+    valor = pd.to_numeric(base[CAMPOS_BRUTOS["valor"]], errors="coerce").fillna(0.0)
+    tem_chave = ~chave.isin(("", "None", "nan"))
+    for _, idx in base[tem_chave].groupby(chave[tem_chave]).groups.items():
+        if len(idx) >= 2 and abs(valor.loc[idx].sum()) < 0.01:
+            excluir.loc[idx] = True
+    return excluir
+
+
+def estornos_compensados(df: pd.DataFrame) -> pd.DataFrame:
+    """As linhas que a R0c tira do relatório — usado pelo check da aba
+    Validações, pra que a remessa cancelada apareça no log em vez de sumir
+    em silêncio."""
+    base = df[df[CAMPOS_BRUTOS["conta_razao"]].apply(conta_banco_valida)]
+    return base[_marcar_estornos_compensados(base)]
+
+
 def classificar(
     df: pd.DataFrame,
     overrides: dict[str, str] | None = None,
@@ -597,6 +652,7 @@ def classificar(
     doc = CAMPOS_BRUTOS["documento"]
 
     base = df[df[conta_razao].apply(conta_banco_valida)].copy()
+    excluir_estorno = _marcar_estornos_compensados(base)
     excluir_reversao = _marcar_reversoes(base)
 
     produto = pd.Series(pd.NA, index=base.index, dtype="object")
@@ -604,6 +660,11 @@ def classificar(
 
     for i, linha in base.iterrows():
         documento = doc_str(linha.get(doc, ""))
+
+        if excluir_estorno.loc[i]:
+            produto.loc[i] = EXCLUIDO
+            regra.loc[i] = "R0c — estorno compensado (remessa cancelada e refeita)"
+            continue
 
         if excluir_reversao.loc[i]:
             produto.loc[i] = EXCLUIDO
