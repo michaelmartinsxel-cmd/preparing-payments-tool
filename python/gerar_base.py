@@ -278,6 +278,9 @@ TAMANHO_PADRAO = 9
 # ver `_produtos_com_valor()`.
 PRODUTOS: tuple[str, ...] = ("Folha de Pagamento", "PIX", "Pagamento Fornecedores", "TM5")
 CENTRO = Alignment(horizontal="center", vertical="center")
+# Usado só no bloco de tópicos da aba Resumo — ver `_aba_resumo()` e a guarda
+# em `_centralizar_tudo()`.
+ESQUERDA = Alignment(horizontal="left", vertical="center")
 H_FILL = PatternFill("solid", fgColor="1F3864")
 H_FONT = Font(name=FONTE, size=9, bold=True, color="FFFFFF")
 T_FILL = PatternFill("solid", fgColor="D9E1F2")
@@ -670,12 +673,20 @@ def _aba_resumo(
     ws["A1"] = "Relatório de Aprovação de Pagamentos"
     ws["A1"].font = TITLE
     ws.merge_cells("A1:D1")
-    ws["A2"] = janela.rotulo
-    ws["A2"].font = Font(name=FONTE, size=9, color="404040")
+    # Linha 2 fica vazia de propósito: a data já aparece em "Data de pagamento"
+    # no bloco de tópicos (linha 4), e repetir logo abaixo do título era
+    # duplicidade — pior ainda quando as duas vinham de fontes diferentes.
 
     bancos = sorted(base["Banco"].dropna().unique())
+    # Data REAL dos lançamentos analisados, não config.DATA_REFERENCIA. É a
+    # mesma data que nomeia o arquivo, e é o que o aprovador confere contra o
+    # portal do banco: em 02.09.2026 o relatório saiu com "28.08.2026" no
+    # cabeçalho só porque a DATA_REFERENCIA da semana não tinha sido editada.
+    # A divergência entre as duas continua acusada como BLOQUEIO no check
+    # "Posting Date == Data_Referencia" da aba Validações.
+    data_pagamento = _data_analisada(base, janela.data_referencia)
     meta = [
-        ("Data de pagamento", janela.rotulo),
+        ("Data de pagamento", data_pagamento.strftime("%d.%m.%Y")),
         ("Banco", ", ".join(bancos)),
         ("Conta G/L", ", ".join(sorted(base["G/L Account"].dropna().astype(str).unique()))),
         ("Status dos lançamentos", "Pendentes"),
@@ -686,13 +697,25 @@ def _aba_resumo(
         ("Documentos", len(base)),
         ("Fonte", "SAP: Administrar itens de fornecedor + Partidas individuais no Razão"),
     ]
+    # Bloco de tópicos alinhado à ESQUERDA (rótulo e valor), diferente do
+    # resto do arquivo, que é centralizado: aqui o valor é texto corrido de
+    # comprimento muito variável ("Santander" ao lado de "SAP: Administrar
+    # itens de fornecedor + ...") e transborda a coluna B, que é estreita
+    # porque acompanha a tabela de baixo. Centralizado, cada linha começava
+    # num ponto diferente. `_centralizar_tudo()` preserva o que já está
+    # explicitamente à esquerda.
     r = 4
     for k, v in meta:
-        ws.cell(row=r, column=1, value=k).font = LABEL
-        ws.cell(row=r, column=2, value=v).font = INFO_SAP
+        rotulo = ws.cell(row=r, column=1, value=k)
+        rotulo.font, rotulo.alignment = LABEL, ESQUERDA
+        valor = ws.cell(row=r, column=2, value=v)
+        valor.font, valor.alignment = INFO_SAP, ESQUERDA
         r += 1
 
     r += 1
+    # Título da tabela continua centralizado, como o título da linha 1 — o
+    # alinhamento à esquerda vale pro texto do bloco de tópicos, não pros
+    # títulos.
     ws.cell(row=r, column=1, value="Resumo por produto").font = Font(name=FONTE, size=9, bold=True)
     ws.merge_cells(f"A{r}:D{r}")
     r += 1
@@ -721,11 +744,15 @@ def _aba_resumo(
     ws.cell(row=total_row, column=3).number_format = FMT
     ws.cell(row=total_row, column=4).number_format = PCT
 
-    # Larguras: colunas A/B servem tanto pro bloco de tópicos (rótulo/valor)
-    # quanto pra tabela "Resumo por produto" (Produto/Qtd.) — usa o maior
-    # valor real dos dois usos. C/D só existem na tabela. Contagem e soma
-    # aqui são calculadas direto do `base` (não lidas das fórmulas da
-    # célula) só pra estimar a largura.
+    # Larguras: a coluna A serve aos dois usos (rótulo do bloco de tópicos e
+    # Produto da tabela), então acompanha o maior dos dois. A coluna B
+    # dimensiona só pela TABELA ("Qtd. documentos" e as contagens): incluir os
+    # valores do bloco de tópicos esticava B até caber "SAP: Administrar itens
+    # de fornecedor + Partidas individuais no Razão", jogando as colunas de
+    # valor pra longe da tabela. Esses textos transbordam por cima de C/D, que
+    # estão vazias nessas linhas, e continuam legíveis. C/D só existem na
+    # tabela. Contagem e soma aqui são calculadas direto do `base` (não lidas
+    # das fórmulas da célula) só pra estimar a largura.
     por_produto = base.groupby("Produto")["Valor"].agg(["count", "sum"]).reindex(produtos, fill_value=0)
     total_valor = por_produto["sum"].sum()
     percentuais = (por_produto["sum"] / total_valor if total_valor else por_produto["sum"] * 0).tolist() + [1.0]
@@ -734,7 +761,7 @@ def _aba_resumo(
         ["Produto", "Qtd. documentos", "Valor (BRL)", "% do total"],
         [
             [k for k, _ in meta] + list(produtos) + ["Total Geral"],
-            [v for _, v in meta] + por_produto["count"].tolist() + [por_produto["count"].sum()],
+            por_produto["count"].tolist() + [por_produto["count"].sum()],
             por_produto["sum"].tolist() + [total_valor],
             percentuais,
         ],
@@ -766,11 +793,10 @@ def _aba_produto(
     ws["A1"] = produto
     ws["A1"].font = TITLE
     ws.merge_cells("A1:C1")
-    # Linha 2 fica em branco de propósito — padrão fixo: título, pula uma
-    # linha, tabela. Sem legenda de Posting Date/Status aqui.
-    _cabecalho(ws, 3, ["Fornecedor", "Qtd. documentos", "Valor (BRL)"], [52, 18, 18])
+    # Cabeçalho na linha 2, colado no título: sem linha em branco no meio.
+    _cabecalho(ws, 2, ["Fornecedor", "Qtd. documentos", "Valor (BRL)"], [52, 18, 18])
 
-    f0 = 4
+    f0 = 3
     for i, row in enumerate(sub.itertuples(index=False)):
         rr = f0 + i
         ws.cell(row=rr, column=1, value=row.Vendor)
@@ -791,7 +817,7 @@ def _aba_produto(
         ws.cell(row=tt, column=2, value=f"=SUM(B{f0}:B{tt - 1})")
         ws.cell(row=tt, column=3, value=f"=SUM(C{f0}:C{tt - 1})")
     else:
-        # Produto sem nenhuma linha: `=SUM(B4:B3)` é intervalo vazio, e o
+        # Produto sem nenhuma linha: `=SUM(B3:B2)` é intervalo vazio, e o
         # Excel normaliza isso incluindo a própria célula do total — é o que
         # dispara "Existe uma ou mais referências circulares" ao abrir o
         # arquivo (o aviso aparecia na barra de status mesmo com a aba
@@ -810,7 +836,7 @@ def _aba_produto(
             list(sub["Valor"]) + [sub["Valor"].sum()],
         ],
     )
-    ws.freeze_panes = "A4"
+    ws.freeze_panes = "A3"
     if not visivel:
         ws.sheet_state = "hidden"
 
@@ -881,12 +907,17 @@ def _centralizar_tudo(wb: Workbook) -> None:
     rodar por último aqui garante que nenhuma escrita posterior perca o
     centro por esquecimento pontual em algum ponto do código acima."""
     for ws in wb.worksheets:
+        # Célula já marcada explicitamente à esquerda (bloco de tópicos da aba
+        # Resumo) é preservada — o passe é pra pegar o que ficou sem
+        # alinhamento, não pra desfazer o que foi decidido na escrita.
         # Grade desligada aqui também, e não só na criação de cada aba: passe
         # único no final garante que nenhuma aba nova apareça com as linhas de
         # grade por esquecimento pontual lá em cima.
         ws.sheet_view.showGridLines = False
         for linha in ws.iter_rows():
             for celula in linha:
+                if celula.alignment is not None and celula.alignment.horizontal == "left":
+                    continue
                 celula.alignment = CENTRO
 
 
