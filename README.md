@@ -1,7 +1,7 @@
 
 # Nordex Comparador
 
-App desktop com interface gráfica para `python/gerar_base.py`: você seleciona
+App desktop com interface gráfica para `gerar_base.py`: você seleciona
 os dois exports SAP ("Administrar itens de fornecedor" e "Partidas individuais
 no Razão") e uma pasta de saída, o app roda o script Python e mostra o
 relatório `Payments_<data>.xlsx` gerado (mesmo layout de `Resumo` / `Base` /
@@ -17,13 +17,16 @@ Tem duas interfaces, mesma lógica por baixo — escolha a que servir na sua
 máquina:
 
 - **`src/` (Electron)** — precisa de Node/npm instalado.
-- **`python/gui.py` (Tkinter)** — só precisa do Python (Tkinter já vem junto
+- **`gui.py` (Tkinter)** — só precisa do Python (Tkinter já vem junto
   do instalador do Python no Windows). Use esta se a máquina não tiver Node.
 
-## Alternativa sem Node — `python/gui.py`
+## Alternativa sem Node — `gui.py`
+
+Todos os arquivos (`gui.py`, `gerar_base.py`, `regras.py`, `config.py`,
+`build_exe.bat`, `requirements.txt`, `assets/`) ficam direto na raiz do
+projeto — não há mais subpasta `python/`. Extraia o ZIP e rode a partir dela:
 
 ```bash
-cd python
 pip install -r requirements.txt
 python gui.py
 ```
@@ -40,10 +43,10 @@ instalador oficial do Windows (python.org) já vem incluído.
 
 ### Gerar um `.exe` standalone (sem precisar de Python na máquina que for usar)
 
-Na máquina que **tem** Python (a mesma que já roda `gui.py` hoje):
+Na máquina que **tem** Python (a mesma que já roda `gui.py` hoje), a partir da
+raiz do projeto:
 
 ```bash
-cd python
 build_exe.bat
 ```
 
@@ -73,12 +76,19 @@ comando exato pra rodar passando o caminho manualmente.
 O `.exe` costuma sair grande (150–250 MB) porque leva o Python inteiro +
 pandas/numpy dentro — normal para esse tipo de empacotamento, não é bug.
 
-**Importante:** rode `build_exe.bat` sempre de dentro da pasta `python/`
+**Importante:** rode `build_exe.bat` sempre de dentro da pasta do projeto
 (onde estão `gui.py`, `requirements.txt`, `assets/`) — nunca de dentro da
 pasta raiz da instalação do Python. Ele usa `requirements.txt` e `assets/`
 relativos à própria localização do script; rodando do lugar errado, o
 PyInstaller não encontra esses arquivos e o build falha ou gera um `.exe`
 incompleto.
+
+Se você tem uma cópia antiga baixada antes desta mudança (com uma subpasta
+`python/` separada), apague a pasta do projeto inteira e baixe o ZIP de novo
+— não copie os arquivos novos por cima da estrutura antiga, porque aí ficam
+duas cópias de `gerar_base.py`/`regras.py`/`config.py` (uma na raiz, outra
+dentro de `python/`) e não dá pra saber qual delas o `build_exe.bat` está
+realmente empacotando.
 
 ## Electron — pré-requisitos
 
@@ -94,7 +104,7 @@ incompleto.
 npm install
 
 # dependências do script Python
-pip install -r python/requirements.txt
+pip install -r requirements.txt
 ```
 
 ## Rodar em desenvolvimento
@@ -109,8 +119,8 @@ npm start
 npm run build
 ```
 
-Gera o instalador em `dist/`. A pasta `python/` (scripts + `requirements.txt`)
-é empacotada junto em `resources/python`; o Python em si **não** é empacotado —
+Gera o instalador em `dist/`. Os scripts Python + `requirements.txt` são
+empacotados junto em `resources/python`; o Python em si **não** é empacotado —
 a máquina que for rodar o instalador precisa ter Python com `pandas`/`openpyxl`
 instalados (ou você aponta o app para um Python específico na tela inicial).
 
@@ -263,7 +273,7 @@ As linhas de grade ficam desligadas em todas as abas, com um passe final em
 topo de `gerar_base.py`) continuam sendo os parâmetros editados manualmente
 toda semana, exatamente como antes — o app não modifica isso automaticamente.
 Se algum lançamento precisar de exceção manual (PIX sem padrão detectável,
-duplicidade etc.), edite `OVERRIDES_SEMANA` em `python/gerar_base.py` antes
+duplicidade etc.), edite `OVERRIDES_SEMANA` em `gerar_base.py` antes
 de gerar o relatório daquela semana.
 
 O nome/pasta do arquivo gerado (`Payments_<data>.xlsx`) é baseado na data
