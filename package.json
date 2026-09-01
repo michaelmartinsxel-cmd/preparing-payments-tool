@@ -21,9 +21,9 @@
     ],
     "extraResources": [
       {
-        "from": "python",
+        "from": ".",
         "to": "python",
-        "filter": ["**/*"]
+        "filter": ["gui.py", "gerar_base.py", "regras.py", "config.py", "requirements.txt", "assets/**/*"]
       }
     ],
     "win": {
