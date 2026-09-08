@@ -4,4 +4,4 @@ node_modules/
 dist/
 *.log
 saida/
-saida_upload/
+saida_upload*/
