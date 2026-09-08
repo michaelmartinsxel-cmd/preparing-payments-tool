@@ -639,9 +639,9 @@ def _aba_base(wb: Workbook, base: pd.DataFrame) -> int:
     ws = wb.active
     ws.title = "Base"
     ws.sheet_view.showGridLines = False
-    cabecalhos = ["Documento", "Data", "Status", "Produto", "Fornecedor", "Valor (BRL)"]
-    _cabecalho(ws, 1, cabecalhos, [14, 12, 12, 24, 46, 16])
-    cols = ["Documento", "Posting Date", "Status", "Produto", "Vendor", "Valor"]
+    cabecalhos = ["Documento", "Data", "Status", "Produto", "Fornecedor", "Valor (BRL)", "Banco"]
+    _cabecalho(ws, 1, cabecalhos, [14, 12, 12, 24, 46, 16, 16])
+    cols = ["Documento", "Posting Date", "Status", "Produto", "Vendor", "Valor", "Banco"]
     for r, row in enumerate(base[cols].itertuples(index=False), start=2):
         for c, v in enumerate(row, start=1):
             cell = ws.cell(row=r, column=c, value=v)
@@ -657,7 +657,7 @@ def _aba_base(wb: Workbook, base: pd.DataFrame) -> int:
     tv.number_format = FMT
     _autofit(ws, cabecalhos, [base[c] for c in cols])
     ws.freeze_panes = "A2"
-    ws.auto_filter.ref = f"A1:F{last}"
+    ws.auto_filter.ref = f"A1:G{last}"
     return last
 
 
@@ -766,6 +766,68 @@ def _aba_resumo(
             percentuais,
         ],
     )
+
+    _tabela_por_banco(ws, base, last, produtos, bancos, total_row + 2)
+
+
+def _tabela_por_banco(
+    ws,
+    base: pd.DataFrame,
+    last: int,
+    produtos: tuple[str, ...],
+    bancos: list[str],
+    linha_inicial: int,
+) -> None:
+    """Mesma tabela de produto, quebrada em uma coluna por banco — o aprovador
+    confere cada portal (Santander e Banco do Brasil) contra a coluna dele, sem
+    precisar somar de cabeça qual parte do produto saiu por onde."""
+    r = linha_inicial
+    ws.cell(row=r, column=1, value="Resumo por produto e banco").font = Font(name=FONTE, size=9, bold=True)
+    ws.merge_cells(f"A{r}:{get_column_letter(3 + len(bancos))}{r}")
+    r += 1
+
+    titulos = ["Produto"] + list(bancos) + ["Total (BRL)", "% do total"]
+    _cabecalho(ws, r, titulos, [30] + [18] * len(bancos) + [18, 12])
+    # Cabeçalho de cada banco recebe a cor da marca (vermelho Santander,
+    # amarelo/azul BB) — as demais colunas seguem o azul padrão do relatório.
+    for i, banco in enumerate(bancos, start=2):
+        cell = ws.cell(row=r, column=i)
+        if banco == "Santander":
+            cell.fill, cell.font = SANTANDER_FILL, SANTANDER_FONT
+        elif banco == "Banco do Brasil":
+            cell.fill, cell.font = BB_FILL, BB_FONT
+
+    col_total = 2 + len(bancos)
+    col_pct = col_total + 1
+    letra_total = get_column_letter(col_total)
+    first = r + 1
+    total_row = first + len(produtos)
+    for i, p in enumerate(produtos):
+        rr = first + i
+        ws.cell(row=rr, column=1, value=p)
+        for j, banco in enumerate(bancos, start=2):
+            ws.cell(
+                row=rr, column=j,
+                value=f'=SUMIFS(Base!$F$2:$F${last},Base!$D$2:$D${last},$A{rr},'
+                      f'Base!$G$2:$G${last},"{banco}")',
+            )
+        primeira_banco = get_column_letter(2)
+        ultima_banco = get_column_letter(1 + len(bancos))
+        ws.cell(row=rr, column=col_total, value=f"=SUM({primeira_banco}{rr}:{ultima_banco}{rr})")
+        ws.cell(row=rr, column=col_pct, value=f"=IFERROR({letra_total}{rr}/${letra_total}${total_row},0)")
+        for c in range(1, col_pct + 1):
+            ws.cell(row=rr, column=c).font = BODY
+            ws.cell(row=rr, column=c).border = BOX
+            if 2 <= c <= col_total:
+                ws.cell(row=rr, column=c).number_format = FMT
+        ws.cell(row=rr, column=col_pct).number_format = PCT
+
+    for c in range(2, col_total + 1):
+        letra = get_column_letter(c)
+        ws.cell(row=total_row, column=c, value=f"=SUM({letra}{first}:{letra}{total_row - 1})")
+        ws.cell(row=total_row, column=c).number_format = FMT
+    ws.cell(row=total_row, column=col_pct, value=1).number_format = PCT
+    _linha_total(ws, total_row, col_pct, 1, "Total Geral")
 
 
 def _aba_produto(
